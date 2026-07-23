@@ -169,6 +169,7 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 
 ## 📜 License & Credits
 
+- **Base Project / Engine:** Based on the open-source project [Cua (`trycua/cua`)](https://github.com/trycua/cua) created by [Cua.ai](https://cua.ai).
 - **Owner & Lead Developer:** Roger Luft — Webstorage Tecnologia (`roger@webstorage.com.br`)
 - **Contact / Support:** +55 51 99242539
 - **Sponsors:** [Webstorage Tecnologia](https://www.webstorage.com.br) | [Imóvel Site](https://www.imovelsite.com.br)
