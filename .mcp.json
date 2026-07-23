@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "fz-computer-vision": {
+      "command": "cua-driver",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}

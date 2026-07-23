@@ -1,0 +1,21 @@
+# Rust / Cargo build outputs
+/target/
+**/target/
+**/*.rs.bk
+
+# Temporary & Local Configs
+*.tmp
+*.log
+.mcp.json.tmp
+
+# IDE / Editor Files
+.vscode/
+.idea/
+.claude/
+.claude-code-history/
+.idx/
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
