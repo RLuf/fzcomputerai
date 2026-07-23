@@ -1,0 +1,55 @@
+name: Build and Release FzComputerAI GUI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release:
+    name: Build Standalone Release (.exe)
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            fzcomputerai/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build fzcomputerai GUI (Release)
+        run: |
+          cargo build --release --manifest-path fzcomputerai/Cargo.toml
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: fzcomputerai/target/release/fzcomputerai.exe
+          body: |
+            ## FzComputerAI v${{ github.ref_name }} — Release Standalone Executable
+            
+            - **Visão Computacional por MCP**: Servidor nativo de visão e automação.
+            - **Transporte HTTP/TCP (Porta 8000)**: Integração pronta para o **FazAI-NG**.
+            - **Interface Gráfica (Rust `egui`)**: Gerenciador nativo de rede, motor e skills.
+            - **Patrocinadores**: Webstorage Tecnologia (www.webstorage.com.br) & Imóvel Site (www.imovelsite.com.br).
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
