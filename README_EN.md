@@ -1,10 +1,36 @@
 # FzComputerAI — Computer Vision via Model Context Protocol (MCP)
 
+<div align="center">
+
 ![CC BY 4.0 License](https://img.shields.io/badge/License-CC%20BY%204.0-blue.svg)
 ![Platforms](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)
 ![MCP Enabled](https://img.shields.io/badge/MCP-Server%20Ready-orange.svg)
+![HTTP TCP Transport](https://img.shields.io/badge/Transport-Stdio%20%7C%20HTTP%20TCP%20:8000-purple.svg)
 
-> **FzComputerAI** is a native **Computer Vision and UI Automation** server accessible via the **Model Context Protocol (MCP)**. Designed to empower AI Agents (such as Claude Code, Antigravity, Cursor, Windsurf, and local LLMs) to see the screen, analyze the visual structure of any desktop application, and execute actions with millimeter precision, both in the foreground and in the background.
+<p align="center">
+  <strong>Native Multimodal Computer Vision & Desktop Automation Server for AI Agents</strong>
+</p>
+
+[Português (BR)](README.md) | [English (US)](README_EN.md)
+
+</div>
+
+---
+
+> **FzComputerAI** is a native **Computer Vision and UI Automation** server accessible via the **Model Context Protocol (MCP)**. Designed to empower AI Agents (such as Claude Code, Antigravity, FazAI-NG, Cursor, Windsurf, and local LLMs) to see the screen, analyze the visual structure of any desktop application, and execute actions with millimeter precision, both locally and remotely over **HTTP TCP/IP**.
+
+---
+
+## 💎 Sponsors & Support
+
+<div align="center">
+
+| Sponsor | Website | Focus |
+| :--- | :--- | :--- |
+| **Webstorage Tecnologia** | [www.webstorage.com.br](https://www.webstorage.com.br) | Infrastructure Solutions, Cloud & Intelligent Automation |
+| **Imóvel Site** | [www.imovelsite.com.br](https://www.imovelsite.com.br) | Real Estate Management & PropTech Platform |
+
+</div>
 
 ---
 
@@ -47,26 +73,43 @@ The server exposes a standardized set of MCP tools (*MCP Tools*) for multimodal 
 
 ---
 
-## 🛠️ System Architecture
+## 🛠️ System Architecture & Connection Modes
 
 ```
-  ┌─────────────────────────────────────────────────────────┐
-  │                 AI Agent (MCP Client)                   │
-  │     (Antigravity / Claude Code / Cursor / Windsurf)     │
-  └────────────────────────────┬────────────────────────────┘
-                               │ JSON-RPC (Stdio / SSE)
-                               ▼
-  ┌─────────────────────────────────────────────────────────┐
-  │         FzComputerAI — MCP Computer Vision Server       │
-  │                     (cua-driver engine)                 │
-  ├────────────────────────────┬────────────────────────────┤
-  │       Screen Capture       │       Input Injection      │
-  │   (Windows WGC/DirectX /   │   (SendInput / X11 /     │
-  │     macOS Quartz / X11)    │      CoreGraphics)         │
-  └────────────────────────────┴────────────────────────────┘
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │                   AI Agent / Remote Orchestrator                       │
+  │        (Antigravity / FazAI-NG / Claude Code / Cursor / Windsurf)       │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      │
+           ┌──────────────────────────┴──────────────────────────┐
+           │ Stdio Mode (Local)       │ HTTP TCP/IP Mode (:8000) │
+           ▼                          ▼                          ▼
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │               FzComputerAI — MCP Computer Vision Server                │
+  │                           (cua-driver engine)                          │
+  ├────────────────────────────────────┬───────────────────────────────────┤
+  │       Screen Capture (WGC/DX)      │    Input Injection (SendInput)    │
+  └────────────────────────────────────┴───────────────────────────────────┘
 ```
 
-The server is built in **Rust** to guarantee ultra-low latency performance (< 50ms per frame) and minimal memory footprint.
+---
+
+## 🌐 Remote Connection via HTTP TCP/IP (Orchestrators like FazAI-NG)
+
+In addition to local `stdio` mode, the server supports remote connections via the **HTTP TCP/IP** protocol. This allows an orchestrator running on a separate server (e.g. Linux) to control desktop machines over the network:
+
+### Enabling the HTTP Port on the Server (Windows):
+```powershell
+# Set TCP port 8000 for the MCP server
+[Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
+cua-driver stop
+cua-driver autostart kick
+```
+
+### Configuring the HTTP Client / Orchestrator:
+- **Endpoint**: `http://<WINDOWS_IP>:8000/mcp`
+- **Method**: `POST`
+- **Header**: `Content-Type: application/json`
 
 ---
 
@@ -88,11 +131,9 @@ For detailed source code compilation instructions and advanced configuration, re
 
 ---
 
-## ⚙️ MCP Client Setup
+## ⚙️ Local MCP Client Setup
 
 ### 1. Antigravity / Gemini CLI (`.mcp.json`)
-Add the following entry to your workspace configuration or `~/.gemini/config`:
-
 ```json
 {
   "mcpServers": {
@@ -113,7 +154,6 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 ```
 
 ### 3. Cursor / Windsurf / VS Code
-In your IDE's `mcp.json` file, add:
 ```json
 {
   "mcpServers": {
@@ -131,6 +171,5 @@ In your IDE's `mcp.json` file, add:
 
 - **Owner & Lead Developer:** Roger Luft — Webstorage Tecnologia (`roger@webstorage.com.br`)
 - **Contact / Support:** +55 51 99242539
+- **Sponsors:** [Webstorage Tecnologia](https://www.webstorage.com.br) | [Imóvel Site](https://www.imovelsite.com.br)
 - **License:** [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
-
-You are free to share and adapt this project for any purpose, provided appropriate credit is given to the original author.

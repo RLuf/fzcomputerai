@@ -4,6 +4,13 @@ This guide contains step-by-step instructions to install, compile, and configure
 
 ---
 
+## 💎 Project Sponsors
+
+- **Webstorage Tecnologia** — [www.webstorage.com.br](https://www.webstorage.com.br)
+- **Imóvel Site** — [www.imovelsite.com.br](https://www.imovelsite.com.br)
+
+---
+
 ## 📋 1. System Requirements
 
 ### Windows
@@ -42,9 +49,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 The script automatically handles:
 1. Checking for Rust/Cargo compiler or existing prebuilt binary.
 2. Compiling the `cua-driver` engine in `--release` mode (if Rust is installed).
-3. Adding the binary directory to the User `PATH`.
-4. Generating the `.mcp.json` configuration file in the project folder.
-5. Performing system health check (`cua-driver doctor`).
+3. Configuring environment variables and adding the binary directory to `PATH`.
+4. Enabling `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` for native HTTP TCP/IP remote transport.
+5. Generating the `.mcp.json` configuration file in the project folder.
+6. Performing system health check (`cua-driver doctor`).
 
 ### On Linux / macOS (Bash)
 Run the Shell script:
@@ -56,7 +64,34 @@ chmod +x ./install.sh
 
 ---
 
-## 🔧 3. Advanced Installation & Manual Build (Rust Cargo)
+## 🌐 3. Configuring HTTP TCP/IP Transport (Remote Orchestrators / FazAI-NG)
+
+To allow agents running on remote servers (such as **FazAI-NG**) to send JSON-RPC calls over the TCP/IP network:
+
+### On Windows (Target Machine to be Controlled):
+```powershell
+# Set environment variable in User environment
+[Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
+
+# Restart cua-driver daemon
+cua-driver stop
+cua-driver autostart kick
+```
+
+### Testing the HTTP TCP port:
+```powershell
+netstat -an | findstr 8000
+# Expected output: TCP 127.0.0.1:8000 LISTENING
+```
+
+### On the Remote Client (FazAI-NG / Orchestrator):
+Send POST JSON-RPC requests to:
+- **URL**: `http://<WINDOWS_IP>:8000/mcp`
+- **Body**: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+
+---
+
+## 🔧 4. Advanced Installation & Manual Build (Rust Cargo)
 
 If you prefer to compile the computer vision server directly from native Rust source code:
 
@@ -81,9 +116,7 @@ The compiled executable will be generated at:
 
 ---
 
-## 💻 4. MCP Client Setup
-
-After completing installation, connect the computer vision server to your favorite AI tools:
+## 💻 5. Local MCP Client Setup
 
 ### A. Antigravity / Gemini CLI
 Create or edit `.mcp.json` in your project root directory:
@@ -105,21 +138,12 @@ Create or edit `.mcp.json` in your project root directory:
 ```
 
 ### B. Claude Code CLI
-Execute the command below to register the MCP server with Claude Code:
-
 ```bash
 claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 ```
 
-To list registered MCP servers:
-```bash
-claude mcp list
-```
-
 ### C. Cursor / Windsurf / VS Code (MCP Extension)
-1. Open Cursor or VS Code settings (`Ctrl+,` or `Cmd+,`).
-2. Go to **MCP Servers** settings.
-3. Add the following configuration structure:
+In your IDE's `mcp.json` file, add:
 
 ```json
 {
@@ -134,37 +158,24 @@ claude mcp list
 
 ---
 
-## 🔍 5. Troubleshooting & Diagnostics
+## 🔍 6. Troubleshooting & Diagnostics
 
 ### Testing Server Communication
-To start the MCP server manually in interactive stdio mode:
-
 ```bash
 cua-driver mcp
 ```
 
 ### Health Diagnostics (`doctor`)
-Run the built-in diagnostic tool to identify permission issues or missing system packages:
-
 ```bash
 cua-driver doctor
 ```
-
-### Common Issues:
-
-1. **`cua-driver` is not recognized as an internal or external command:**
-   - Restart your terminal or PowerShell window after running `install.ps1` to reload environment variables.
-2. **Screen capture failure on Windows:**
-   - Ensure the session is not locked at the Logon screen or running via headless SSH/WinRM without a graphical display session.
-3. **Screen Recording permission error on macOS:**
-   - Go to *System Settings > Privacy & Security > Screen & System Audio Recording* and grant permission to your terminal app or `cua-driver`.
 
 ---
 
 ## 📧 Support & Contact
 
-For questions or technical support during deployment:
 - **Author:** Roger Luft
-- **Company:** Webstorage Tecnologia
+- **Company:** Webstorage Tecnologia (`www.webstorage.com.br`)
+- **Partner:** Imóvel Site (`www.imovelsite.com.br`)
 - **Email:** `roger@webstorage.com.br`
 - **WhatsApp:** +55 51 99242539

@@ -4,6 +4,13 @@ Este guia contém as instruções passo a passo para instalar, compilar e config
 
 ---
 
+## 💎 Patrocinadores do Projeto
+
+- **Webstorage Tecnologia** — [www.webstorage.com.br](https://www.webstorage.com.br)
+- **Imóvel Site** — [www.imovelsite.com.br](https://www.imovelsite.com.br)
+
+---
+
 ## 📋 1. Pré-Requisitos
 
 ### Windows
@@ -42,9 +49,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 O script realizará automaticamente:
 1. Verificação do compilador Rust/Cargo ou busca do executável compilado.
 2. Compilação do motor `cua-driver` em modo `--release` (se Rust estiver instalado).
-3. Adição do diretório de binários ao `PATH` do usuário.
-4. Criação do arquivo de configuração `.mcp.json` na pasta do projeto.
-5. Diagnóstico de saúde do ambiente (`cua-driver doctor`).
+3. Configuração das variáveis de ambiente e adição do diretório de binários ao `PATH`.
+4. Ativação automática da variável `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` para suporte nativo a HTTP TCP/IP.
+5. Criação do arquivo de configuração `.mcp.json` na pasta do projeto.
+6. Diagnóstico de saúde do ambiente (`cua-driver doctor`).
 
 ### No Linux / macOS (Bash)
 Execute o script Shell:
@@ -56,7 +64,34 @@ chmod +x ./install.sh
 
 ---
 
-## 🔧 3. Instalação Avançada & Compilação Manual (Rust Cargo)
+## 🌐 3. Configuração do Transporte HTTP TCP/IP (Orquestradores Remotos / FazAI-NG)
+
+Para permitir que agentes rodando em servidores remotos (como o **FazAI-NG**) enviem chamadas JSON-RPC via rede TCP/IP:
+
+### No Windows (Servidor Alvo a ser controlado):
+```powershell
+# Configura a variável no ambiente de usuário
+[Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
+
+# Reinicia o serviço de inicialização do cua-driver
+cua-driver stop
+cua-driver autostart kick
+```
+
+### Testando a porta HTTP:
+```powershell
+netstat -an | findstr 8000
+# Deve retornar: TCP 127.0.0.1:8000 LISTENING
+```
+
+### No Cliente Remoto (FazAI-NG / Orquestrador):
+Envie chamadas POST JSON-RPC para:
+- **URL**: `http://<IP_DO_WINDOWS>:8000/mcp`
+- **Body**: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+
+---
+
+## 🔧 4. Instalação Avançada & Compilação Manual (Rust Cargo)
 
 Se você deseja compilar o servidor de visão computacional diretamente a partir do código-fonte nativo em Rust:
 
@@ -81,9 +116,7 @@ O binário executável será gerado em:
 
 ---
 
-## 💻 4. Configuração nos Clientes MCP
-
-Após concluir a instalação, conecte o servidor de visão computacional aos seus clientes de IA favoritos:
+## 💻 5. Configuração nos Clientes MCP Locais
 
 ### A. Antigravity / Gemini CLI
 Crie ou edite o arquivo `.mcp.json` no diretório raiz do projeto:
@@ -105,21 +138,12 @@ Crie ou edite o arquivo `.mcp.json` no diretório raiz do projeto:
 ```
 
 ### B. Claude Code CLI
-Execute o comando abaixo para adicionar o servidor MCP ao Claude Code:
-
 ```bash
 claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 ```
 
-Para verificar se o servidor foi registrado corretamente:
-```bash
-claude mcp list
-```
-
 ### C. Cursor / Windsurf / VS Code (Extensão MCP)
-1. Abra as configurações do Cursor ou VS Code (`Ctrl+,` ou `Cmd+,`).
-2. Acesse as configurações de **MCP Servers**.
-3. Adicione a seguinte estrutura de configuração:
+No arquivo de configuração de servidores MCP da IDE, adicione:
 
 ```json
 {
@@ -134,7 +158,7 @@ claude mcp list
 
 ---
 
-## 🔍 5. Diagnóstico e Resolução de Problemas (Troubleshooting)
+## 🔍 6. Diagnóstico e Resolução de Problemas (Troubleshooting)
 
 ### Testando a Comunicação do Servidor
 Para iniciar o servidor MCP manualmente via linha de comando em modo interativo (stdio):
@@ -144,27 +168,16 @@ cua-driver mcp
 ```
 
 ### Verificação de Saúde (`doctor`)
-Execute o diagnóstico integrado para identificar se há restrições de permissão ou falta de dependências:
-
 ```bash
 cua-driver doctor
 ```
-
-### Problemas Frequentes:
-
-1. **`cua-driver` não é reconhecido como um comando interno ou externo:**
-   - Feche e reabra o terminal/PowerShell após rodar o `install.ps1` para carregar a nova variável `PATH`.
-2. **Erro de captura de tela no Windows:**
-   - Certifique-se de que a sessão não está bloqueada na tela de Logon ou rodando via WinRM/SSH sem sessão gráfica ativa.
-3. **Erro de permissão de gravação no macOS:**
-   - Acesse *Ajustes do Sistema > Privacidade e Segurança > Gravação de Tela e Áudio do Sistema* e autorize o aplicativo do terminal ou o binário `cua-driver`.
 
 ---
 
 ## 📧 Suporte & Contato
 
-Em caso de dúvidas ou necessidade de suporte técnico na implantação:
 - **Autor:** Roger Luft
-- **Empresa:** Webstorage Tecnologia
+- **Empresa:** Webstorage Tecnologia (`www.webstorage.com.br`)
+- **Parceiro:** Imóvel Site (`www.imovelsite.com.br`)
 - **E-mail:** `roger@webstorage.com.br`
 - **WhatsApp:** +55 51 99242539

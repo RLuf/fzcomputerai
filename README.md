@@ -1,10 +1,36 @@
 # FzComputerAI — Computer Vision via Model Context Protocol (MCP)
 
-![Licença CC BY 4.0](https://img.shields.io/badge/Licen%C3%A7a-CC%20BY%204.0-blue.svg)
+<div align="center">
+
+![CC BY 4.0 License](https://img.shields.io/badge/Licen%C3%A7a-CC%20BY%204.0-blue.svg)
 ![Plataformas](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)
 ![MCP Enabled](https://img.shields.io/badge/MCP-Server%20Ready-orange.svg)
+![HTTP TCP Transport](https://img.shields.io/badge/Transport-Stdio%20%7C%20HTTP%20TCP%20:8000-purple.svg)
 
-> **FzComputerAI** é um servidor nativo de **Visão Computacional e Automação de Interface (UI)** acessível via **Model Context Protocol (MCP)**. Projetado para capacitar Agentes de Inteligência Artificial (como Claude Code, Antigravity, Cursor, Windsurf e LLMs locais) a enxergar a tela, analisar a estrutura visual de qualquer aplicativo de desktop e executar ações com precisão milimétrica, em primeiro plano ou em segundo plano.
+<p align="center">
+  <strong>Servidor Nativo de Visão Computacional Multimodal & Automação Desktop para Agentes de IA</strong>
+</p>
+
+[Português (BR)](README.md) | [English (US)](README_EN.md)
+
+</div>
+
+---
+
+> **FzComputerAI** é um servidor nativo de **Visão Computacional e Automação de Interface (UI)** acessível via **Model Context Protocol (MCP)**. Projetado para capacitar Agentes de Inteligência Artificial (como Claude Code, Antigravity, FazAI-NG, Cursor, Windsurf e LLMs locais) a enxergar a tela, analisar a estrutura visual de qualquer aplicativo de desktop e executar ações com precisão milimétrica, tanto localmente quanto via rede **TCP/IP HTTP**.
+
+---
+
+## 💎 Patrocinadores & Apoio
+
+<div align="center">
+
+| Patrocinador | Website | Foco |
+| :--- | :--- | :--- |
+| **Webstorage Tecnologia** | [www.webstorage.com.br](https://www.webstorage.com.br) | Soluções em Infraestrutura, Cloud & Automação Inteligente |
+| **Imóvel Site** | [www.imovelsite.com.br](https://www.imovelsite.com.br) | Plataforma de Gestão e Tecnologia Imobiliária |
+
+</div>
 
 ---
 
@@ -47,26 +73,43 @@ O servidor expõe um conjunto de ferramentas MCP (*MCP Tools*) padronizadas para
 
 ---
 
-## 🛠️ Arquitetura do Sistema
+## 🛠️ Arquitetura do Sistema & Modos de Conexão
 
 ```
-  ┌─────────────────────────────────────────────────────────┐
-  │                 Agente de IA (MCP Client)               │
-  │     (Antigravity / Claude Code / Cursor / Windsurf)     │
-  └────────────────────────────┬────────────────────────────┘
-                               │ JSON-RPC (Stdio / SSE)
-                               ▼
-  ┌─────────────────────────────────────────────────────────┐
-  │         FzComputerAI — MCP Computer Vision Server       │
-  │                     (cua-driver engine)                 │
-  ├────────────────────────────┬────────────────────────────┤
-  │     Captura de Tela        │     Injeção de Input       │
-  │   (Windows WGC/DirectX /   │   (SendInput / X11 /     │
-  │     macOS Quartz / X11)    │      CoreGraphics)         │
-  └────────────────────────────┴────────────────────────────┘
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │                 Agente de IA / Orquestrador Remoto                     │
+  │        (Antigravity / FazAI-NG / Claude Code / Cursor / Windsurf)       │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      │
+           ┌──────────────────────────┴──────────────────────────┐
+           │ Modo Stdio (Local)       │ Modo HTTP TCP/IP (:8000) │
+           ▼                          ▼                          ▼
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │               FzComputerAI — MCP Computer Vision Server                │
+  │                           (cua-driver engine)                          │
+  ├────────────────────────────────────┬───────────────────────────────────┤
+  │       Captura de Tela (WGC/DX)     │    Injeção de Input (SendInput)   │
+  └────────────────────────────────────┴───────────────────────────────────┘
 ```
 
-O servidor é construído em **Rust** para garantir performance de baixíssima latência (< 50ms por frame) e consumo reduzido de memória.
+---
+
+## 🌐 Conexão Remota via TCP/IP HTTP (Orquestradores como FazAI-NG)
+
+Além do modo local `stdio`, o servidor suporta conexão remota via protocolo **HTTP TCP/IP**. Isso permite que um orquestrador rodando em um servidor separado (ex: Linux) controle desktops na rede:
+
+### Ativando a Porta HTTP no Servidor (Windows):
+```powershell
+# Ativar porta TCP 8000 para o servidor MCP
+[Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
+cua-driver stop
+cua-driver autostart kick
+```
+
+### Configurando o Cliente HTTP / Orquestrador:
+- **Endpoint**: `http://<IP_DO_WINDOWS>:8000/mcp`
+- **Método**: `POST`
+- **Header**: `Content-Type: application/json`
 
 ---
 
@@ -88,11 +131,9 @@ Para instruções detalhadas de compilação a partir do código fonte e configu
 
 ---
 
-## ⚙️ Configuração nos Clientes MCP
+## ⚙️ Configuração nos Clientes MCP Locais
 
 ### 1. Antigravity / Gemini CLI (`.mcp.json`)
-Adicione a seguinte entrada na configuração do seu workspace ou em `~/.gemini/config`:
-
 ```json
 {
   "mcpServers": {
@@ -113,7 +154,6 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 ```
 
 ### 3. Cursor / Windsurf / VS Code
-No arquivo `mcp.json` da sua IDE, adicione:
 ```json
 {
   "mcpServers": {
@@ -131,6 +171,5 @@ No arquivo `mcp.json` da sua IDE, adicione:
 
 - **Titular & Desenvolvedor:** Roger Luft — Webstorage Tecnologia (`roger@webstorage.com.br`)
 - **Contato / Suporte:** +55 51 99242539
+- **Patrocinadores:** [Webstorage Tecnologia](https://www.webstorage.com.br) | [Imóvel Site](https://www.imovelsite.com.br)
 - **Licença:** [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
-
-Você tem a liberdade de compartilhar e adaptar este projeto para qualquer fim, desde que atribuído o devido crédito ao autor original.

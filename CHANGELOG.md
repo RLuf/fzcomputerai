@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-07-23
+
+### Added
+- **Native HTTP TCP/IP Transport Support**: Configured `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` to enable direct JSON-RPC HTTP server listening on port `8000` for remote orchestrators (such as **FazAI-NG**).
+- **Official Sponsors Section**: Added official project sponsors:
+  - **Webstorage Tecnologia** ([www.webstorage.com.br](https://www.webstorage.com.br))
+  - **Imóvel Site** ([www.imovelsite.com.br](https://www.imovelsite.com.br))
+- **Enhanced Documentation & Installer**:
+  - Updated `README.md`, `README_EN.md`, `INSTALL.md`, and `INSTALL_EN.md` with complete TCP/IP HTTP endpoint setup, payload examples, architecture diagrams, and sponsor badges.
+  - Enhanced `install.ps1` to automatically set the `CUA_DRIVER_RS_MCP_HTTP_PORT` environment variable and restart the daemon.
+
+---
+
 ## [1.0.0] - 2026-07-23
 
 ### Added

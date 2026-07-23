@@ -2,7 +2,8 @@
 # Script de Instalação do FzComputerAI / CUA Driver (Computer Vision via MCP)
 # Suporte Nativo: Windows PowerShell 5.1+ / PowerShell Core 7+
 # Licença: Creative Commons Attribution 4.0 International (CC BY 4.0)
-# Desenvolvido por: Roger Luft (Webstorage Tecnologia)
+# Desenvolvido por: Roger Luft (Webstorage Tecnologia & Imóvel Site)
+# Patrocinadores: www.webstorage.com.br | www.imovelsite.com.br
 # ==============================================================================
 
 [CmdletBinding()]
@@ -11,7 +12,8 @@ param(
     [switch]$AutoStart = $true,
     [switch]$NoAutoStart,
     [switch]$NoPathUpdate,
-    [string]$InstallDir = ""
+    [string]$InstallDir = "",
+    [string]$HttpPort = "8000"
 )
 
 if ($NoAutoStart) { $AutoStart = $false }
@@ -23,7 +25,9 @@ function Write-Header {
     Write-Host ""
     Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host "   FzComputerAI — Servidor de Computer Vision via MCP (Windows)" -ForegroundColor Yellow
-    Write-Host "   Webstorage Tecnologia — Roger Luft <roger@webstorage.com.br>" -ForegroundColor Green
+    Write-Host "   Webstorage Tecnologia (www.webstorage.com.br)" -ForegroundColor Green
+    Write-Host "   Imóvel Site (www.imovelsite.com.br)" -ForegroundColor Green
+    Write-Host "   Autor: Roger Luft <roger@webstorage.com.br>" -ForegroundColor Green
     Write-Host "======================================================================" -ForegroundColor Cyan
     Write-Host ""
 }
@@ -50,6 +54,14 @@ $ScriptRoot = $PSScriptRoot
 if (-not $ScriptRoot) { $ScriptRoot = Get-Location }
 
 Write-Info "Iniciando verificação de dependências e ambiente..."
+
+# Configurar variável para transporte HTTP TCP na porta informada (ex: 8000)
+if ($HttpPort) {
+    Write-Info "Configurando variável CUA_DRIVER_RS_MCP_HTTP_PORT=$HttpPort para suporte TCP/IP..."
+    [Environment]::SetEnvironmentVariable("CUA_DRIVER_RS_MCP_HTTP_PORT", $HttpPort, "User")
+    $env:CUA_DRIVER_RS_MCP_HTTP_PORT = $HttpPort
+    Write-Success "Transporte HTTP/TCP habilitado na porta $HttpPort."
+}
 
 # 1. Verificar se Rust/Cargo está instalado
 $hasCargo = $false
@@ -148,6 +160,7 @@ $mcpConfig = @{
             "args" = @("mcp")
             "env" = @{
                 "RUST_LOG" = "info"
+                "CUA_DRIVER_RS_MCP_HTTP_PORT" = $HttpPort
             }
         }
     }
@@ -159,8 +172,10 @@ Write-Success "Arquivo .mcp.json criado/atualizado com sucesso."
 if ($AutoStart -and $BinPath -and (Test-Path $BinPath)) {
     Write-Info "Verificando/Registrando serviço de inicialização automática..."
     try {
+        & "$BinPath" stop 2>$null
         & "$BinPath" autostart enable 2>$null
-        Write-Success "Autostart ativado."
+        & "$BinPath" autostart kick 2>$null
+        Write-Success "Autostart ativado e reiniciado com porta TCP $HttpPort."
     } catch {
         Write-Warn "Não foi possível ativar o autostart automaticamente."
     }
@@ -177,7 +192,8 @@ if (Get-Command cua-driver -ErrorAction SilentlyContinue) {
 Write-Host ""
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host "   Instalação concluída com sucesso!" -ForegroundColor Green
-Write-Host "   O Servidor de Computer Vision via MCP está pronto para uso." -ForegroundColor Yellow
-Write-Host "   Comando para executar manualmente: cua-driver mcp" -ForegroundColor Cyan
+Write-Host "   Servidor MCP em Stdio: cua-driver mcp" -ForegroundColor Yellow
+Write-Host "   Servidor MCP em TCP/IP: http://127.0.0.1:$HttpPort/mcp" -ForegroundColor Yellow
+Write-Host "   Patrocinadores: www.webstorage.com.br | www.imovelsite.com.br" -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 Write-Host ""
