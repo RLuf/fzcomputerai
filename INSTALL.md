@@ -36,31 +36,42 @@ Este guia contém as instruções passo a passo para instalar, compilar e config
 
 ---
 
-## ⚡ 2. Instalação Automática (Modo Padrão)
+## ⚡ 2. Métodos de Instalação
 
-### No Windows (PowerShell)
-Execute o script de instalação no PowerShell:
+### A. Via NPM (Gerenciador de Pacotes Node.js)
+```bash
+npm install -g fzcomputerai
+```
 
+### B. Instalação Remota via PowerShell (Windows One-liner)
 ```powershell
-# Executar a partir da raiz do repositório
+iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
+```
+
+### C. Instalação Remota via Bash (Linux & macOS One-liner)
+```bash
+curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh | bash
+```
+
+### D. Instalação Local a partir do Código-Fonte
+
+#### No Windows (PowerShell)
+```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-O script realizará automaticamente:
-1. Verificação do compilador Rust/Cargo ou busca do executável compilado.
-2. Compilação do motor `cua-driver` em modo `--release` (se Rust estiver instalado).
-3. Configuração das variáveis de ambiente e adição do diretório de binários ao `PATH`.
-4. Ativação automática da variável `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` para suporte nativo a HTTP TCP/IP.
-5. Criação do arquivo de configuração `.mcp.json` na pasta do projeto.
-6. Diagnóstico de saúde do ambiente (`cua-driver doctor`).
-
-### No Linux / macOS (Bash)
-Execute o script Shell:
-
+#### No Linux / macOS (Bash)
 ```bash
 chmod +x ./install.sh
 ./install.sh
 ```
+
+O script de instalação realizará automaticamente:
+1. Verificação do compilador Rust/Cargo e compilação do motor `cua-driver` e da GUI `fzcomputerai`.
+2. Configuração das variáveis de ambiente e adição dos binários ao `PATH`.
+3. Ativação automática da variável `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` para suporte nativo a HTTP TCP/IP.
+4. Criação do arquivo de configuração `.mcp.json`.
+5. Diagnóstico de saúde do ambiente (`cua-driver doctor`).
 
 ---
 

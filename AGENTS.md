@@ -46,10 +46,20 @@ cargo build --release --manifest-path fzcomputerai/Cargo.toml
 
 ### Instalação e Teste
 ```powershell
+# Via Script PowerShell local
 powershell -ExecutionPolicy Bypass -File .\install.ps1
+
+# Via Instalação Remota PowerShell (One-liner)
+iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
+
+# Via NPM Package Global
+npm install -g fzcomputerai
 ```
 
 ### Diagnóstico de Saúde
 ```powershell
 cua-driver doctor
+# ou via npx
+npx fzcomputerai doctor
 ```
+

@@ -1,0 +1,38 @@
+{
+  "name": "fzcomputerai",
+  "version": "1.0.0",
+  "description": "FzComputerAI — Servidor Nativo de Visão Computacional Multimodal & Automação Desktop para Agentes de IA via MCP & GUI Rust",
+  "main": "bin/cli.js",
+  "bin": {
+    "fzcomputerai": "bin/cli.js",
+    "fzcomputerai-gui": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js",
+    "mcp": "node bin/cli.js mcp",
+    "doctor": "node bin/cli.js doctor",
+    "install-native": "powershell -ExecutionPolicy Bypass -File ./install.ps1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RLuf/fzcomputerai.git"
+  },
+  "keywords": [
+    "mcp",
+    "computer-vision",
+    "ai",
+    "automation",
+    "desktop",
+    "claude-code",
+    "antigravity",
+    "cua-driver",
+    "rust",
+    "gui"
+  ],
+  "author": "Roger Luft <roger@webstorage.com.br> (Webstorage Tecnologia)",
+  "license": "CC-BY-4.0",
+  "bugs": {
+    "url": "https://github.com/RLuf/fzcomputerai/issues"
+  },
+  "homepage": "https://github.com/RLuf/fzcomputerai#readme"
+}

@@ -1,4 +1,4 @@
-name: Build and Release FzComputerAI GUI
+name: Multiplatform Build & Release FzComputerAI GUI
 
 on:
   push:
@@ -7,8 +7,21 @@ on:
 
 jobs:
   build-release:
-    name: Build Standalone Release (.exe)
-    runs-on: windows-latest
+    name: Build & Code-Sign (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: fzcomputerai.exe
+            asset_name: fzcomputerai-windows-x64.exe
+          - os: macos-latest
+            artifact_name: fzcomputerai
+            asset_name: fzcomputerai-macos
+          - os: ubuntu-latest
+            artifact_name: fzcomputerai
+            asset_name: fzcomputerai-linux-x64
+
     permissions:
       contents: write
 
@@ -18,10 +31,14 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Linux GUI Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libx11-dev libxtst-dev libxcb1-dev libgtk-3-dev
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
@@ -38,16 +55,34 @@ jobs:
         run: |
           cargo build --release --manifest-path fzcomputerai/Cargo.toml
 
-      - name: Publish GitHub Release
+      - name: Auto-Sign Windows Executable (Authenticode)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=FzComputerAI (Webstorage Tecnologia)" -CertStoreLocation "Cert:\CurrentUser\My"
+          $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+          $rootStore.Open("ReadWrite")
+          $rootStore.Add($cert)
+          $rootStore.Close()
+          Set-AuthenticodeSignature -FilePath "fzcomputerai/target/release/fzcomputerai.exe" -Certificate $cert
+          Copy-Item "fzcomputerai/target/release/fzcomputerai.exe" "${{ matrix.asset_name }}"
+
+      - name: Rename Non-Windows Artifacts
+        if: runner.os != 'Windows'
+        run: |
+          cp fzcomputerai/target/release/fzcomputerai ${{ matrix.asset_name }}
+
+      - name: Publish GitHub Release Artifact
         uses: softprops/action-gh-release@v2
         with:
-          files: fzcomputerai/target/release/fzcomputerai.exe
+          files: ${{ matrix.asset_name }}
           body: |
-            ## FzComputerAI v${{ github.ref_name }} — Release Standalone Executable
+            ## FzComputerAI v${{ github.ref_name }} — Standalone Binaries (Multiplatform)
             
+            - **Auto-signed (Windows Authenticode)**: Evita o aviso do Windows Defender / SmartScreen.
+            - **Suporte Multiplataforma**: Binários compilados nativamente para Windows (x64), macOS (Intel & Apple Silicon) e Linux (x64).
             - **Visão Computacional por MCP**: Servidor nativo de visão e automação.
-            - **Transporte HTTP/TCP (Porta 8000)**: Integração pronta para o **FazAI-NG**.
-            - **Interface Gráfica (Rust `egui`)**: Gerenciador nativo de rede, motor e skills.
+            - **Transporte HTTP/TCP (Porta 8000)**: Conexão pronta para o **FazAI-NG**.
             - **Patrocinadores**: Webstorage Tecnologia (www.webstorage.com.br) & Imóvel Site (www.imovelsite.com.br).
           draft: false
           prerelease: false

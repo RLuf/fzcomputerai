@@ -3,9 +3,10 @@
 **/target/
 **/*.rs.bk
 
-# Temporary & Local Configs
+# Temporary, Tarball & Local Configs
 *.tmp
 *.log
+*.tgz
 .mcp.json.tmp
 
 # IDE / Editor Files

@@ -36,31 +36,42 @@ This guide contains step-by-step instructions to install, compile, and configure
 
 ---
 
-## ⚡ 2. Automatic Installation (Default Mode)
+## ⚡ 2. Installation Methods
 
-### On Windows (PowerShell)
-Run the installation script in PowerShell:
+### A. Via NPM (Node.js Package Manager)
+```bash
+npm install -g fzcomputerai
+```
 
+### B. Remote Installation via PowerShell (Windows One-liner)
 ```powershell
-# Run from repository root
+iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
+```
+
+### C. Remote Installation via Bash (Linux & macOS One-liner)
+```bash
+curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh | bash
+```
+
+### D. Local Installation from Source Code
+
+#### On Windows (PowerShell)
+```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The script automatically handles:
-1. Checking for Rust/Cargo compiler or existing prebuilt binary.
-2. Compiling the `cua-driver` engine in `--release` mode (if Rust is installed).
-3. Configuring environment variables and adding the binary directory to `PATH`.
-4. Enabling `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` for native HTTP TCP/IP remote transport.
-5. Generating the `.mcp.json` configuration file in the project folder.
-6. Performing system health check (`cua-driver doctor`).
-
-### On Linux / macOS (Bash)
-Run the Shell script:
-
+#### On Linux / macOS (Bash)
 ```bash
 chmod +x ./install.sh
 ./install.sh
 ```
+
+The installation script automatically handles:
+1. Checking for Rust/Cargo compiler and building `cua-driver` engine and `fzcomputerai` GUI.
+2. Configuring environment variables and adding binary directory to `PATH`.
+3. Enabling `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` for native HTTP TCP/IP remote transport.
+4. Generating `.mcp.json` configuration file.
+5. Performing system health check (`cua-driver doctor`).
 
 ---
 

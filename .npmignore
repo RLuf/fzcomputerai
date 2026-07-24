@@ -1,0 +1,9 @@
+target/
+cua/target/
+fzcomputerai/target/
+.git/
+.github/
+.claude/
+.claude-code-history/
+.idx/
+*.log

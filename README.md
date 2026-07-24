@@ -115,19 +115,32 @@ cua-driver autostart kick
 
 ## 📦 Instalação Rápida
 
-### Windows (PowerShell)
-```powershell
-# Execução direta do script de instalação
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-### Linux & macOS (Bash)
+### 1. Via NPM (Global)
 ```bash
-chmod +x ./install.sh
-./install.sh
+npm install -g fzcomputerai
 ```
 
-Para instruções detalhadas de compilação a partir do código fonte e configurações avançadas, consulte o [INSTALL.md](file:///g:/fzcomcontrol/INSTALL.md).
+### 2. Instalação Remota via PowerShell (Windows One-liner)
+```powershell
+iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
+```
+
+### 3. Instalação Remota via Bash (Linux & macOS One-liner)
+```bash
+curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh | bash
+```
+
+### 4. Compilação a partir do Código Fonte / Pacote Tarball (.tgz)
+```bash
+# Baixar ou extrair o pacote de código-fonte .tgz:
+tar -xzf fzcomputerai-1.0.0.tgz
+cd package (ou fzcomputerai)
+
+# Compilação do motor e da GUI Rust:
+cargo build --release --manifest-path fzcomputerai/Cargo.toml
+```
+
+Para instruções detalhadas de compilação e configurações avançadas, consulte o [INSTALL.md](file:///g:/fzcomcontrol/INSTALL.md).
 
 ---
 
@@ -164,6 +177,19 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
   }
 }
 ```
+
+---
+
+## 🤝 Patrocinadores Oficiais & Apoio (Patrons)
+
+<div align="center">
+
+| Patrocinador | Logo | Website Oficial |
+| :--- | :---: | :--- |
+| **Webstorage Tecnologia** | <a href="https://www.webstorage.com.br"><img src="https://www.webstorage.com.br/assets/logo-webstorage-alta.png" width="220" alt="Webstorage Tecnologia"></a> | [www.webstorage.com.br](https://www.webstorage.com.br) |
+| **Imóvel Site** | <a href="https://www.imovelsite.com.br"><img src="https://www.webstorage.com.br/assets/logo-webstorage-alta.png" width="220" alt="Imóvel Site"></a> | [www.imovelsite.com.br](https://www.imovelsite.com.br) |
+
+</div>
 
 ---
 

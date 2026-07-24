@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Script de Instalação do FzComputerAI / CUA Driver (Computer Vision via MCP)
+# Script de Instalação do FzComputerAI (Computer Vision via MCP & GUI Rust)
 # Suporte Nativo: Linux (X11/Wayland) & macOS
 # Licença: Creative Commons Attribution 4.0 International (CC BY 4.0)
 # Desenvolvido por: Roger Luft (Webstorage Tecnologia)
+# Patrocinadores: www.webstorage.com.br | www.imovelsite.com.br
 # ==============================================================================
 
 set -e
@@ -15,8 +16,10 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 echo -e "${CYAN}======================================================================${NC}"
-echo -e "${YELLOW}   FzComputerAI — Servidor de Computer Vision via MCP (Linux/macOS)${NC}"
-echo -e "${GREEN}   Webstorage Tecnologia — Roger Luft <roger@webstorage.com.br>${NC}"
+echo -e "${YELLOW}   FzComputerAI — Servidor de Computer Vision via MCP & GUI Rust${NC}"
+echo -e "${GREEN}   Webstorage Tecnologia (www.webstorage.com.br)${NC}"
+echo -e "${GREEN}   Imóvel Site (www.imovelsite.com.br)${NC}"
+echo -e "${GREEN}   Autor: Roger Luft <roger@webstorage.com.br>${NC}"
 echo -e "${CYAN}======================================================================${NC}"
 echo ""
 
@@ -36,6 +39,13 @@ HAS_CUA=0
 if command -v cua-driver >/dev/null 2>&1; then
     HAS_CUA=1
     echo -e "${GREEN}[SUCCESS] cua-driver detectado: $(cua-driver --version)${NC}"
+fi
+
+# Compilar GUI Rust se fzcomputerai/Cargo.toml existir
+GUI_WORKSPACE="$SCRIPT_DIR/fzcomputerai/Cargo.toml"
+if [ "$HAS_CARGO" -eq 1 ] && [ -f "$GUI_WORKSPACE" ]; then
+    echo -e "${CYAN}[INFO] Compilando a interface gráfica FzComputerAI (GUI Rust)...${NC}"
+    (cd "$SCRIPT_DIR/fzcomputerai" && cargo build --release) || echo -e "${YELLOW}[AVISO] Falha ao compilar GUI Rust.${NC}"
 fi
 
 RUST_WORKSPACE="$SCRIPT_DIR/cua/libs/cua-driver/rust/Cargo.toml"
@@ -95,7 +105,8 @@ fi
 
 echo ""
 echo -e "${CYAN}======================================================================${NC}"
-echo -e "${GREEN}   Instalação concluída com sucesso!${NC}"
+echo -e "${GREEN}   Instalação do FzComputerAI concluída com sucesso!${NC}"
 echo -e "${YELLOW}   O Servidor de Computer Vision via MCP está pronto para uso.${NC}"
-echo -e "${CYAN}   Comando para executar manualmente: cua-driver mcp${NC}"
+echo -e "${CYAN}   Comando MCP stdio: cua-driver mcp${NC}"
+echo -e "${CYAN}   Comando CLI NPM: npx fzcomputerai mcp${NC}"
 echo -e "${CYAN}======================================================================${NC}"
