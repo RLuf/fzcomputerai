@@ -59,10 +59,6 @@ jobs:
         shell: powershell
         run: |
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=FzComputerAI (Webstorage Tecnologia)" -CertStoreLocation "Cert:\CurrentUser\My"
-          $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
-          $rootStore.Open("ReadWrite")
-          $rootStore.Add($cert)
-          $rootStore.Close()
           Set-AuthenticodeSignature -FilePath "fzcomputerai/target/release/fzcomputerai.exe" -Certificate $cert
           Copy-Item "fzcomputerai/target/release/fzcomputerai.exe" "${{ matrix.asset_name }}"
 
