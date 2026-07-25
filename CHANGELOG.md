@@ -1,51 +1,39 @@
 # Changelog
 
-All notable changes to the **FzComputerAI / CUA Driver Computer Vision MCP** project will be documented in this file.
+Todas as alterações notáveis do projeto **FzComputerAI / CUA Driver Computer Vision MCP** serão documentadas neste arquivo.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
----
-
-## [1.1.0] - 2026-07-23
-
-### Added
-- **Native HTTP TCP/IP Transport Support**: Configured `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` to enable direct JSON-RPC HTTP server listening on port `8000` for remote orchestrators (such as **FazAI-NG**).
-- **Official Sponsors Section**: Added official project sponsors:
-  - **Webstorage Tecnologia** ([www.webstorage.com.br](https://www.webstorage.com.br))
-  - **Imóvel Site** ([www.imovelsite.com.br](https://www.imovelsite.com.br))
-- **Enhanced Documentation & Installer**:
-  - Updated `README.md`, `README_EN.md`, `INSTALL.md`, and `INSTALL_EN.md` with complete TCP/IP HTTP endpoint setup, payload examples, architecture diagrams, and sponsor badges.
-  - Enhanced `install.ps1` to automatically set the `CUA_DRIVER_RS_MCP_HTTP_PORT` environment variable and restart the daemon.
+O formato baseia-se no [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/),
+e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.0.0] - 2026-07-23
+## [1.0.2] - 2026-07-25
 
-### Added
-- **MCP Computer Vision Integration**: Native support for Model Context Protocol (MCP) enabling AI agents (Claude Code, Antigravity, Cursor, Windsurf) to perform real-time desktop visual analysis and UI control.
-- **Multimodal Visual Inspection Tools**:
-  - `get_desktop_state`: Full screen capture, window listings, mouse cursor position tracking.
-  - `get_window_state`: Window-level visual capture and UI Automation tree element extraction.
-  - `take_screenshot`: Fast PNG/JPEG base64 image capture for multimodal LLM processing.
-- **Pointer & Keyboard Control Tools**:
-  - `mouse_click`, `mouse_move`, `mouse_drag`, `mouse_down`, `mouse_up`.
-  - `keyboard_type`, `keyboard_press`, `shortcut`.
-  - `launch_app`, `close_app`, `recording_start`, `recording_stop`.
-- **Automated Installation Scripts**:
-  - `install.ps1`: Native PowerShell installer for Windows with automatic dependency checking, Cargo release build, PATH configuration, and `.mcp.json` generation.
-  - `install.sh`: Native Bash installer for Linux (X11/Wayland) and macOS.
-- **Multilingual Documentation**:
-  - Portuguese (PT-BR): `README.md` and `INSTALL.md`.
-  - English (EN): `README_EN.md` and `INSTALL_EN.md`.
-- **Project Governance & Config**:
-  - Configured workspace `.gitignore` for Rust build artifacts, temporary files, and IDE workspace directories.
-  - Added default `.mcp.json` configuration file for automatic client discovery.
+### Adicionado
+- **Interface Gráfica (GUI) Nativa em Rust (`fzcomputerai`)**: Painel de controle completo com abas para configuração do servidor MCP, testes de calibração de tela e visão, gerenciador de janelas e processos, gravação de trajetória e diagnóstico (Doctor).
+- **Autoassinatura Digital (Authenticode) para Windows**: O script `install.ps1` agora gera e aplica um certificado CodeSigning (`CN=FzComputerAI (Webstorage Tecnologia)`) ao binário, eliminando avisos do Windows Defender.
+- **Workflow CI/CD Multiplataforma**: Configuração completa do GitHub Actions para compilação nativa em Windows (com autoassinatura), macOS e Linux a cada release de tag `v*`.
+- **Pacote NPM**: Publicação global via `npm install -g fzcomputerai`.
+
+### Corrigido
+- Correção no workflow do GitHub Actions (`fail-fast: false`, remoção de `submodules: recursive` desnecessário e adição de dependências Linux).
 
 ---
 
-## [0.8.3] - 2026-07-15
+## [1.0.1] - 2026-07-24
 
-### Added
-- Initial workspace integration with `cua-driver` core engine (Rust workspace).
-- Windows Graphics Capture (WGC) and Win32 UI Automation backend crates.
+### Corrigido
+- Ajustes de pipeline no GitHub Actions.
+
+---
+
+## [1.0.0] - 2026-07-24
+
+### Adicionado
+- **Integração de Visão Computacional MCP**: Suporte nativo ao Model Context Protocol (MCP) permitindo que agentes de IA inspecionem visualmente o desktop e controlem a UI em tempo real.
+- **Ferramentas de Inspeção Visual Multimodal**: `get_desktop_state`, `get_window_state`, `take_screenshot`.
+- **Ferramentas de Controle de Ponteiro & Teclado**: `mouse_click`, `mouse_move`, `keyboard_type`, `shortcut`, etc.
+- **Suporte a Transporte HTTP TCP/IP Nativo**: Configuração da porta `8000` via `CUA_DRIVER_RS_MCP_HTTP_PORT` para orquestradores remotos como FazAI-NG.
+- **Documentação Multilíngue**: Guias de instalação e uso completos em Português e Inglês.
+- **Scripts de Instalação Automatizados**: `install.ps1` e `install.sh`.
+- **Seção de Patrocinadores Oficiais**: Inclusão de Webstorage Tecnologia e Imóvel Site.
