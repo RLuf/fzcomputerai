@@ -24,9 +24,23 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 ui.horizontal(|ui| {
                     ui.label("Status:");
                     if state.is_recording {
-                        ui.label(RichText::new("🔴 GRAVANDO SESSÃO...").color(Color32::from_rgb(239, 83, 80)).strong());
+                        ui.label(
+                            RichText::new(match state.language {
+                                Language::PtBr => "● GRAVANDO SESSÃO...",
+                                Language::English => "● RECORDING SESSION...",
+                            })
+                            .color(Color32::from_rgb(239, 83, 80))
+                            .strong(),
+                        );
                     } else {
-                        ui.label(RichText::new("⚪ Inativo").color(Color32::from_rgb(180, 180, 180)).strong());
+                        ui.label(
+                            RichText::new(match state.language {
+                                Language::PtBr => "● Inativo",
+                                Language::English => "● Idle",
+                            })
+                            .color(Color32::from_rgb(180, 180, 180))
+                            .strong(),
+                        );
                     }
                 });
 
@@ -34,8 +48,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let rec_start_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "🎥 Iniciar Gravação (start_recording)",
-                        Language::English => "🎥 Start Recording (start_recording)",
+                        Language::PtBr => "▶ Iniciar Gravação (start_recording)",
+                        Language::English => "▶ Start Recording (start_recording)",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -52,8 +66,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let rec_stop_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "⏹️ Finalizar & Salvar Trajetória",
-                        Language::English => "⏹️ Stop & Save Trajectory",
+                        Language::PtBr => "Finalizar & Salvar Trajetória",
+                        Language::English => "Stop & Save Trajectory",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -88,7 +102,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 egui::ScrollArea::vertical()
                     .max_height(220.0)
                     .show(ui, |ui| {
-                        ui.monospace(&state.recording_log);
+                        if state.recording_log.is_empty() {
+                            ui.monospace(match state.language {
+                                Language::PtBr => "Gravação de trajetória inativa.",
+                                Language::English => "Trajectory recording inactive.",
+                            });
+                        } else {
+                            ui.monospace(&state.recording_log);
+                        }
                     });
             });
     });

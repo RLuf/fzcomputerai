@@ -23,8 +23,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let doc_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "🩺 Executar Diagnóstico Doctor",
-                        Language::English => "🩺 Run Doctor Diagnostics",
+                        Language::PtBr => "Executar Diagnóstico Doctor",
+                        Language::English => "Run Doctor Diagnostics",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -42,7 +42,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 egui::ScrollArea::vertical()
                     .max_height(200.0)
                     .show(ui, |ui| {
-                        ui.monospace(&state.doctor_output);
+                        if state.doctor_output.is_empty() {
+                            ui.monospace(match state.language {
+                                Language::PtBr => "Pronto para executar diagnósticos.",
+                                Language::English => "Ready to run diagnostics.",
+                            });
+                        } else {
+                            ui.monospace(&state.doctor_output);
+                        }
                     });
             });
 
@@ -72,8 +79,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let install_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "📥 Instalar Skills nos Agentes",
-                        Language::English => "📥 Install Skills to Agents",
+                        Language::PtBr => "Instalar Skills nos Agentes",
+                        Language::English => "Install Skills to Agents",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -90,8 +97,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let update_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "🔄 Atualizar Pacote de Skills",
-                        Language::English => "🔄 Update Skill Pack",
+                        Language::PtBr => "Atualizar Pacote de Skills",
+                        Language::English => "Update Skill Pack",
                     })
                     .color(Color32::WHITE)
                 )
@@ -107,8 +114,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let uninstall_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "🗑️ Remover Symlinks",
-                        Language::English => "🗑️ Uninstall Symlinks",
+                        Language::PtBr => "Remover Symlinks",
+                        Language::English => "Uninstall Symlinks",
                     })
                     .color(Color32::WHITE)
                 )
@@ -125,7 +132,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 egui::ScrollArea::vertical()
                     .max_height(140.0)
                     .show(ui, |ui| {
-                        ui.monospace(&state.skills_output);
+                        if state.skills_output.is_empty() {
+                            ui.monospace(match state.language {
+                                Language::PtBr => "Nenhuma ação de skill executada.",
+                                Language::English => "No skill action executed yet.",
+                            });
+                        } else {
+                            ui.monospace(&state.skills_output);
+                        }
                     });
             });
     });

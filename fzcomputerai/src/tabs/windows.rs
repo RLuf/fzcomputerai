@@ -23,8 +23,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let list_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "📋 Listar Janelas Ativas (list_windows)",
-                        Language::English => "📋 List Active Windows (list_windows)",
+                        Language::PtBr => "Listar Janelas Ativas (list_windows)",
+                        Language::English => "List Active Windows (list_windows)",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -58,8 +58,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let launch_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "🚀 Iniciar App (ex: notepad, chrome)",
-                        Language::English => "🚀 Launch App (e.g. notepad, chrome)",
+                        Language::PtBr => "▶ Iniciar App (ex: notepad, chrome)",
+                        Language::English => "▶ Launch App (e.g. notepad, chrome)",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -94,7 +94,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 egui::ScrollArea::vertical()
                     .max_height(250.0)
                     .show(ui, |ui| {
-                        ui.monospace(&state.windows_log);
+                        if state.windows_log.is_empty() {
+                            ui.monospace(match state.language {
+                                Language::PtBr => "Clique em 'Listar Janelas Ativas' para carregar janelas.",
+                                Language::English => "Click 'List Active Windows' to load windows.",
+                            });
+                        } else {
+                            ui.monospace(&state.windows_log);
+                        }
                     });
             });
     });

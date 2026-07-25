@@ -30,8 +30,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let fetch_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "📐 Detectar Resolução & DPI (get_screen_size)",
-                        Language::English => "📐 Detect Resolution & DPI (get_screen_size)",
+                        Language::PtBr => "Detectar Resolução & DPI (get_screen_size)",
+                        Language::English => "Detect Resolution & DPI (get_screen_size)",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -71,8 +71,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 let move_btn = egui::Button::new(
                     RichText::new(match state.language {
-                        Language::PtBr => "🎯 Mover Ponteiro para (X, Y)",
-                        Language::English => "🎯 Move Pointer to (X, Y)",
+                        Language::PtBr => "Mover Ponteiro para (X, Y)",
+                        Language::English => "Move Pointer to (X, Y)",
                     })
                     .color(Color32::WHITE)
                     .strong()
@@ -107,7 +107,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 egui::ScrollArea::vertical()
                     .max_height(250.0)
                     .show(ui, |ui| {
-                        ui.monospace(&state.calibration_log);
+                        if state.calibration_log.is_empty() {
+                            ui.monospace(match state.language {
+                                Language::PtBr => "Pronto para calibrar tela e coordenadas de visão.",
+                                Language::English => "Ready to calibrate screen and vision coordinates.",
+                            });
+                        } else {
+                            ui.monospace(&state.calibration_log);
+                        }
                     });
             });
     });

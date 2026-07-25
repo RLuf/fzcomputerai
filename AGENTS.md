@@ -9,7 +9,7 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 **FzComputerAI** é um ecossistema nativo de Visão Computacional e Automação de Interface (UI) acessível via **Model Context Protocol (MCP)** e por uma **Interface Gráfica Nativa Compilável em Rust (`fzcomputerai`)**.
 
 - **Motor Principal:** `cua-driver` (escrito em Rust, localizado em `cua/libs/cua-driver/rust`).
-- **Interface Gráfica:** `fzcomputerai` (escrito em Rust com `egui 0.29` / `eframe`).
+- **Interface Gráfica:** `fzcomputerai` (escrito em Rust com `egui 0.29.1` / `eframe 0.29.1`).
 - **Protocolo de Comunicação:** MCP via Stdio local e HTTP TCP/IP (`CUA_DRIVER_RS_MCP_HTTP_PORT=8000`).
 - **Patrocinadores Oficiais:** Webstorage Tecnologia (`www.webstorage.com.br`) e Imóvel Site (`www.imovelsite.com.br`).
 
@@ -21,6 +21,12 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - Todos os componentes nativos devem ser mantidos em **Rust 2021 edition**.
 - A GUI `fzcomputerai` utiliza `egui` e `eframe` de modo imediato (Immediate Mode GUI), sem dependências pesadas de Chromium, WebView ou Node.js runtime.
 - Não introduza dependências desnecessárias no `Cargo.toml`.
+
+### 1.1. Convenções obrigatórias da GUI (`fzcomputerai/src/app.rs`)
+- **Spawns de processos SEMPRE via `quiet_cmd(program)`** (helper em `app.rs`): no Windows ele aplica `creation_flags(0x08000000)` (`CREATE_NO_WINDOW`) para não piscar janelas de console. Nunca use `std::process::Command::new` diretamente fora do helper.
+- **Versão SEMPRE via `env!("CARGO_PKG_VERSION")`** (ou `concat!` com ela). Nunca hardcode o número de versão em strings da UI — a fonte da verdade é o `Cargo.toml`.
+- **Todo handler de ação loga no Console Debug**: use `run_logged()` (comando, exit code, stdout, stderr, erros de spawn) ou `log_debug()` para eventos. O painel do Console Debug fica na aba MCP & Rede (limite de 64KB, mantém o final do log).
+- **Status honesto**: estados como `port_active`/`daemon_running` devem refletir verificação real (ex.: teste TCP no endpoint `/mcp`), nunca valores presumidos.
 
 ### 2. Comunicação MCP & Ferramentas de Visão
 - As ferramentas de visão computacional expostas via MCP são:

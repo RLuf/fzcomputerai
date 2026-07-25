@@ -2,6 +2,7 @@
 
 <div align="center">
 
+![GitHub Release](https://img.shields.io/github/v/release/RLuf/fzcomputerai)
 ![CC BY 4.0 License](https://img.shields.io/badge/License-CC%20BY%204.0-blue.svg)
 ![Platforms](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)
 ![MCP Enabled](https://img.shields.io/badge/MCP-Server%20Ready-orange.svg)
@@ -73,6 +74,26 @@ The server exposes a standardized set of MCP tools (*MCP Tools*) for multimodal 
 
 ---
 
+## 🖥️ Native GUI (Rust `fzcomputerai`)
+
+Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / English** with real-time language toggle. Organized into **5 tabs**:
+
+| Tab | Purpose |
+| :--- | :--- |
+| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), portproxy rule (with UAC elevation when required), real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP and a **Copy** button, **Start with Windows** (autostart) option, and a built-in **Debug Console**. |
+| **Calibration & Vision** | Screen calibration, DPI scaling, and coordinate click testing. |
+| **Windows & Apps** | Active window listing, UIA inspection, and application launching. |
+| **Recording Trajectory** | Start and stop session/trajectory recordings. |
+| **Doctor & Skills** | Health diagnostics (`doctor`) and skill install/update/uninstall. |
+
+Highlights:
+- **Debug Console**: every command executed by the GUI is logged (command, exit code, stdout, stderr) in a dedicated panel on the MCP & Network tab.
+- **Honest status**: the displayed port/daemon state comes from a real TCP test against the `/mcp` endpoint, not assumptions.
+- **Start with Windows**: checkbox that registers/removes the GUI from the user's autostart (`HKCU\...\Run`).
+- **Copy MCP URL**: one click copies `http://<LAN_IP>:<port>/mcp` to the clipboard.
+
+---
+
 ## 🛠️ System Architecture & Connection Modes
 
 ```
@@ -127,13 +148,20 @@ iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1
 
 ### 3. Remote Installation via Bash (Linux & macOS One-liner)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh | bash
+curl -fsSL https://github.com/RLuf/fzcomputerai/raw/master/install.sh | bash
 ```
+
+To simulate the installation without changing anything on your system (`--dry-run`):
+```bash
+curl -fsSL https://github.com/RLuf/fzcomputerai/raw/master/install.sh | bash -s -- --dry-run
+```
+
+> **Note:** the remote installer using the official release binary installs the **`fzcomputerai` GUI**. The stdio MCP server is still `cua-driver` — the script prints the corresponding `.mcp.json` snippet and points you to `npx fzcomputerai mcp` (the source-build fallback also compiles `cua-driver`).
 
 ### 4. Compilation from Source Code / Tarball (.tgz)
 ```bash
 # Download or extract source code tarball (.tgz):
-tar -xzf fzcomputerai-1.0.0.tgz
+tar -xzf fzcomputerai-<version>.tgz
 cd package (or fzcomputerai)
 
 # Build engine and Rust GUI:
@@ -186,8 +214,8 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 
 | Sponsor | Logo | Official Website |
 | :--- | :---: | :--- |
-| **Webstorage Tecnologia** | <a href="https://www.webstorage.com.br"><img src="https://www.webstorage.com.br/assets/logo-webstorage-alta.png" width="220" alt="Webstorage Tecnologia"></a> | [www.webstorage.com.br](https://www.webstorage.com.br) |
-| **Imóvel Site** | <a href="https://www.imovelsite.com.br"><img src="https://www.webstorage.com.br/assets/logo-webstorage-alta.png" width="220" alt="Imóvel Site"></a> | [www.imovelsite.com.br](https://www.imovelsite.com.br) |
+| **Webstorage Tecnologia** | <a href="https://www.webstorage.com.br"><img src="assets/img/webstorage-logo.png" width="180" alt="Webstorage Tecnologia"></a> | [www.webstorage.com.br](https://www.webstorage.com.br) |
+| **Imóvel Site** | <a href="https://www.imovelsite.com.br"><img src="assets/img/imovelsite-logo.png" width="180" alt="Imóvel Site"></a> | [www.imovelsite.com.br](https://www.imovelsite.com.br) |
 
 </div>
 

@@ -30,6 +30,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Stamp Version from Tag (Cargo.toml + package.json)
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Tag ${GITHUB_REF_NAME} -> versao ${VERSION}"
+          # Substitui apenas a PRIMEIRA ocorrencia (secao [package]) — perl e portavel nos 3 runners (GNU/BSD sed divergem)
+          perl -0777 -pi -e "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/m" fzcomputerai/Cargo.toml
+          perl -0777 -pi -e "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
+          echo "--- fzcomputerai/Cargo.toml ---"
+          grep -n '^version = ' fzcomputerai/Cargo.toml
+          echo "--- package.json ---"
+          grep -n '"version":' package.json
+
       - name: Install Linux GUI Dependencies
         if: runner.os == 'Linux'
         run: |
@@ -67,14 +80,28 @@ jobs:
         run: |
           cp fzcomputerai/target/release/fzcomputerai ${{ matrix.asset_name }}
 
+      - name: Generate SHA256 Checksum
+        shell: bash
+        run: |
+          # sha256sum existe no Linux e no Git Bash (Windows); macOS usa shasum
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
+          fi
+          cat "${{ matrix.asset_name }}.sha256"
+
       - name: Publish GitHub Release Artifact
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset_name }}
+          files: |
+            ${{ matrix.asset_name }}
+            ${{ matrix.asset_name }}.sha256
           body: |
-            ## FzComputerAI v${{ github.ref_name }} — Standalone Binaries (Multiplatform)
+            ## FzComputerAI ${{ github.ref_name }} — Standalone Binaries (Multiplatform)
             
             - **Auto-signed (Windows Authenticode)**: Evita o aviso do Windows Defender / SmartScreen.
+            - **Integridade (SHA256)**: Cada binário acompanha um arquivo `.sha256` — verifique com `sha256sum -c` (Linux/Git Bash) ou `shasum -a 256 -c` (macOS).
             - **Suporte Multiplataforma**: Binários compilados nativamente para Windows (x64), macOS (Intel & Apple Silicon) e Linux (x64).
             - **Visão Computacional por MCP**: Servidor nativo de visão e automação.
             - **Transporte HTTP/TCP (Porta 8000)**: Conexão pronta para o **FazAI-NG**.

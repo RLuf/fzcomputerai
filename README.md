@@ -2,6 +2,7 @@
 
 <div align="center">
 
+![GitHub Release](https://img.shields.io/github/v/release/RLuf/fzcomputerai)
 ![CC BY 4.0 License](https://img.shields.io/badge/Licen%C3%A7a-CC%20BY%204.0-blue.svg)
 ![Plataformas](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)
 ![MCP Enabled](https://img.shields.io/badge/MCP-Server%20Ready-orange.svg)
@@ -73,6 +74,26 @@ O servidor expõe um conjunto de ferramentas MCP (*MCP Tools*) padronizadas para
 
 ---
 
+## 🖥️ Interface Gráfica Nativa (GUI Rust `fzcomputerai`)
+
+GUI nativa em Rust (`egui`/`eframe`, sem Chromium ou WebView), bilíngue **PT-BR / English** com alternância em tempo real. Organizada em **5 abas**:
+
+| Aba | Função |
+| :--- | :--- |
+| **MCP & Rede** | Configuração da porta HTTP do servidor MCP (`CUA_DRIVER_RS_MCP_HTTP_PORT`), regra portproxy (com elevação UAC quando necessária), teste real do endpoint `/mcp` via TCP, URL de rede com IP LAN detectado automaticamente e botão **Copiar**, opção **Iniciar com o Windows** (autostart) e **Console Debug** integrado. |
+| **Calibração & Visão** | Calibração de tela, DPI scaling e teste de clique por coordenadas. |
+| **Janelas & Processos** | Listagem de janelas ativas, inspeção UIA e lançamento de aplicativos. |
+| **Gravação Trajetória** | Início e parada de gravações de sessão/trajetória. |
+| **Doctor & Skills** | Diagnóstico de saúde (`doctor`) e instalação/atualização/remoção de skills. |
+
+Destaques:
+- **Console Debug**: todo comando executado pela GUI é registrado (comando, exit code, stdout, stderr) em painel dedicado na aba MCP & Rede.
+- **Status honesto**: o estado da porta/daemon exibido vem de um teste TCP real no endpoint `/mcp`, não de suposições.
+- **Iniciar com o Windows**: checkbox que registra/remove a GUI no autostart do usuário (`HKCU\...\Run`).
+- **Copiar URL MCP**: um clique copia `http://<IP_LAN>:<porta>/mcp` para a área de transferência.
+
+---
+
 ## 🛠️ Arquitetura do Sistema & Modos de Conexão
 
 ```
@@ -127,13 +148,20 @@ iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1
 
 ### 3. Instalação Remota via Bash (Linux & macOS One-liner)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh | bash
+curl -fsSL https://github.com/RLuf/fzcomputerai/raw/master/install.sh | bash
 ```
+
+Para simular a instalação sem alterar nada no sistema (`--dry-run`):
+```bash
+curl -fsSL https://github.com/RLuf/fzcomputerai/raw/master/install.sh | bash -s -- --dry-run
+```
+
+> **Nota:** o instalador remoto via binário oficial instala a **GUI `fzcomputerai`**. O servidor MCP stdio continua sendo o `cua-driver` — o script imprime o snippet `.mcp.json` correspondente e orienta o uso de `npx fzcomputerai mcp` (o fallback de compilação a partir do código-fonte também compila o `cua-driver`).
 
 ### 4. Compilação a partir do Código Fonte / Pacote Tarball (.tgz)
 ```bash
 # Baixar ou extrair o pacote de código-fonte .tgz:
-tar -xzf fzcomputerai-1.0.0.tgz
+tar -xzf fzcomputerai-<versão>.tgz
 cd package (ou fzcomputerai)
 
 # Compilação do motor e da GUI Rust:
@@ -186,8 +214,8 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 
 | Patrocinador | Logo | Website Oficial |
 | :--- | :---: | :--- |
-| **Webstorage Tecnologia** | <a href="https://www.webstorage.com.br"><img src="https://www.webstorage.com.br/assets/logo-webstorage-alta.png" width="220" alt="Webstorage Tecnologia"></a> | [www.webstorage.com.br](https://www.webstorage.com.br) |
-| **Imóvel Site** | <a href="https://www.imovelsite.com.br"><img src="https://www.webstorage.com.br/assets/logo-webstorage-alta.png" width="220" alt="Imóvel Site"></a> | [www.imovelsite.com.br](https://www.imovelsite.com.br) |
+| **Webstorage Tecnologia** | <a href="https://www.webstorage.com.br"><img src="assets/img/webstorage-logo.png" width="180" alt="Webstorage Tecnologia"></a> | [www.webstorage.com.br](https://www.webstorage.com.br) |
+| **Imóvel Site** | <a href="https://www.imovelsite.com.br"><img src="assets/img/imovelsite-logo.png" width="180" alt="Imóvel Site"></a> | [www.imovelsite.com.br](https://www.imovelsite.com.br) |
 
 </div>
 
