@@ -8,6 +8,16 @@ pub enum Language {
     English,
 }
 
+/// Status real do endpoint MCP, distinguindo loopback de LAN.
+/// Verde (LanListening) SOMENTE se o netstat mostrar listener no IP da LAN
+/// (ou 0.0.0.0) E o teste TCP no IP da LAN conectar.
+#[derive(PartialEq, Clone, Copy)]
+pub enum PortStatus {
+    Stopped,
+    LocalOnly,
+    LanListening,
+}
+
 #[derive(PartialEq, Clone, Copy)]
 pub enum Tab {
     Network,
@@ -59,6 +69,7 @@ pub struct AppState {
     pub http_port: String,
     pub lan_ip: String,
     pub port_active: bool,
+    pub port_status: PortStatus,
     pub daemon_running: bool,
 
     // Calibração & Visão
@@ -100,6 +111,7 @@ impl Default for AppState {
             http_port: "8000".to_string(),
             lan_ip: detect_lan_ip(),
             port_active: false,
+            port_status: PortStatus::Stopped,
             daemon_running: false,
 
             screen_width: 1920,
@@ -183,37 +195,32 @@ impl AppState {
         }
     }
 
-    /// Teste REAL do endpoint MCP: TcpStream::connect_timeout em
-    /// 127.0.0.1:{porta} (~800ms) e, se conectar, GET /mcp mínimo lendo a
-    /// primeira linha da resposta. Atualiza `port_active` com a verdade.
-    pub fn check_port_status(&mut self) {
+    /// Teste TCP REAL em um endereço: TcpStream::connect_timeout (~800ms) e,
+    /// se conectar, GET /mcp mínimo lendo a primeira linha da resposta.
+    /// Loga o resultado no Console Debug e retorna se conectou.
+    fn tcp_probe(&mut self, ip: &str, port: u16) -> bool {
         use std::io::{Read, Write};
 
-        let port: u16 = match self.http_port.trim().parse() {
-            Ok(p) => p,
+        let addr: std::net::SocketAddr = match format!("{}:{}", ip, port).parse() {
+            Ok(a) => a,
             Err(_) => {
-                self.port_active = false;
-                let port_txt = self.http_port.clone();
                 self.log_debug(&format!(
-                    "> tcp-check 127.0.0.1:{}\n  ERRO: porta invalida",
-                    port_txt
+                    "> tcp-check {}:{}\n  ERRO: endereco invalido",
+                    ip, port
                 ));
-                return;
+                return false;
             }
         };
-
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         let timeout = std::time::Duration::from_millis(800);
 
         match std::net::TcpStream::connect_timeout(&addr, timeout) {
             Ok(mut stream) => {
-                self.port_active = true;
                 let _ = stream.set_read_timeout(Some(timeout));
                 let _ = stream.set_write_timeout(Some(timeout));
 
                 let request = format!(
-                    "GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-                    port
+                    "GET /mcp HTTP/1.1\r\nHost: {}:{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                    ip, port
                 );
                 let first_line = match stream.write_all(request.as_bytes()) {
                     Ok(()) => {
@@ -231,18 +238,141 @@ impl AppState {
                     Err(e) => format!("(erro de escrita: {})", e),
                 };
                 self.log_debug(&format!(
-                    "> tcp-check 127.0.0.1:{}\n  TCP conectado. GET /mcp -> {}",
-                    port, first_line
+                    "> tcp-check {}:{}\n  TCP conectado. GET /mcp -> {}",
+                    ip, port, first_line
                 ));
+                true
             }
             Err(e) => {
-                self.port_active = false;
-                self.log_debug(&format!(
-                    "> tcp-check 127.0.0.1:{}\n  SEM conexao ({})",
-                    port, e
-                ));
+                self.log_debug(&format!("> tcp-check {}:{}\n  SEM conexao ({})", ip, port, e));
+                false
             }
         }
+    }
+
+    /// Fonte de verdade do sistema: netstat. Retorna true se existe LISTENER
+    /// em `<lan_ip>:<porta>` ou `0.0.0.0:<porta>` (que cobre todas as
+    /// interfaces). Loga as linhas do netstat que batem com a porta.
+    fn netstat_lan_listening(&mut self, lan_ip: &str, port: u16) -> bool {
+        let out = match quiet_cmd("netstat").args(["-ano", "-p", "tcp"]).output() {
+            Ok(o) => o,
+            Err(e) => {
+                self.log_debug(&format!("> netstat -ano -p tcp\n  ERRO ao executar: {}", e));
+                return false;
+            }
+        };
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let want_lan = format!("{}:{}", lan_ip, port);
+        let want_any = format!("0.0.0.0:{}", port);
+        let suffix = format!(":{}", port);
+
+        let mut matched: Vec<String> = Vec::new();
+        let mut lan_listening = false;
+        for line in text.lines() {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 4 || !cols[0].eq_ignore_ascii_case("TCP") {
+                continue;
+            }
+            let local = cols[1];
+            // Listener no Windows: endereço remoto 0.0.0.0:0 e/ou estado LISTENING
+            let is_listener = cols[2] == "0.0.0.0:0" || line.to_uppercase().contains("LISTEN");
+            if !is_listener {
+                continue;
+            }
+            if local.ends_with(&suffix) {
+                matched.push(line.trim().to_string());
+            }
+            if local == want_lan || local == want_any {
+                lan_listening = true;
+            }
+        }
+
+        if matched.is_empty() {
+            self.log_debug(&format!(
+                "> netstat -ano -p tcp (filtro :{})\n  nenhum LISTENER na porta {}",
+                port, port
+            ));
+        } else {
+            self.log_debug(&format!(
+                "> netstat -ano -p tcp (filtro :{})\n  {}",
+                port,
+                matched.join("\n  ")
+            ));
+        }
+        lan_listening
+    }
+
+    /// Teste REAL do endpoint MCP nos DOIS endereços (loopback e IP da LAN
+    /// exibido), com o netstat como fonte de verdade para a LAN. Atualiza
+    /// `port_status`:
+    ///   LanListening = netstat mostra `<ip_lan>:<porta>` (ou 0.0.0.0) LISTENING
+    ///                  E o TCP no IP da LAN conectou;
+    ///   LocalOnly    = só 127.0.0.1 responde;
+    ///   Stopped      = nada responde.
+    pub fn check_port_status(&mut self) {
+        let port: u16 = match self.http_port.trim().parse() {
+            Ok(p) => p,
+            Err(_) => {
+                self.port_active = false;
+                self.port_status = PortStatus::Stopped;
+                let port_txt = self.http_port.clone();
+                self.log_debug(&format!("> tcp-check :{}\n  ERRO: porta invalida", port_txt));
+                return;
+            }
+        };
+
+        // 1) loopback
+        let local_ok = self.tcp_probe("127.0.0.1", port);
+
+        // 2) IP da LAN exibido na interface (o endereço publicado na URL MCP)
+        let lan_ip = self.lan_ip.trim().to_string();
+        let lan_is_loopback = lan_ip == "127.0.0.1" || lan_ip.eq_ignore_ascii_case("localhost");
+        let lan_ok = if lan_is_loopback {
+            self.log_debug("[status] IP LAN e loopback — teste LAN nao se aplica.");
+            false
+        } else {
+            self.tcp_probe(&lan_ip, port)
+        };
+
+        // 3) fonte de verdade: netstat
+        let netstat_lan = if lan_is_loopback {
+            false
+        } else {
+            self.netstat_lan_listening(&lan_ip, port)
+        };
+
+        if netstat_lan && !lan_ok {
+            self.log_debug(
+                "[status] AVISO: netstat mostra listener na LAN mas o teste TCP falhou (firewall?).",
+            );
+        }
+        if lan_ok && !netstat_lan {
+            self.log_debug(
+                "[status] AVISO: TCP na LAN conectou mas netstat nao mostra o listener — nao pintando verde.",
+            );
+        }
+
+        self.port_active = local_ok || lan_ok;
+        self.port_status = if lan_ok && netstat_lan {
+            PortStatus::LanListening
+        } else if local_ok {
+            PortStatus::LocalOnly
+        } else {
+            PortStatus::Stopped
+        };
+
+        let resumo = match self.port_status {
+            PortStatus::LanListening => format!(
+                "[status] LISTENING (local + LAN) — {}:{} confirmado no netstat e via TCP.",
+                lan_ip, port
+            ),
+            PortStatus::LocalOnly => format!(
+                "[status] LOCAL APENAS — porta {} responde em 127.0.0.1 mas NAO e acessivel pela LAN ({}).",
+                port, lan_ip
+            ),
+            PortStatus::Stopped => format!("[status] STOPPED — nada respondeu na porta {}.", port),
+        };
+        self.log_debug(&resumo);
     }
 
     /// Define CUA_DRIVER_RS_MCP_HTTP_PORT (User) pela via oficial e RELÊ a
@@ -290,80 +420,117 @@ impl AppState {
         self.check_port_status();
     }
 
-    /// Regra portproxy do netsh (exige admin). Tenta sem elevação; se o
-    /// erro indicar falta de privilégio, dispara UAC oficial via
-    /// `Start-Process netsh -Verb RunAs` e valida com `show v4tov4`.
+    /// Lê `netsh interface portproxy show v4tov4` e retorna true se existe
+    /// linha cujo par (endereço de escuta, porta de escuta) é exatamente
+    /// `<ip> <porta>`. Parse por token — nada de contains() solto.
+    #[cfg(target_os = "windows")]
+    fn portproxy_rule_exists(&mut self, ip: &str, port: &str) -> bool {
+        match self.run_logged("netsh", &["interface", "portproxy", "show", "v4tov4"]) {
+            Some(show) => {
+                let text = String::from_utf8_lossy(&show.stdout).to_string();
+                text.lines().any(|line| {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    cols.len() >= 2 && cols[0] == ip && cols[1] == port
+                })
+            }
+            None => false,
+        }
+    }
+
+    /// O APP aplica a regra portproxy do netsh (não apenas sugere).
+    /// Etapas, todas logadas com o resultado real:
+    ///   1. verificar se a regra já existe (show v4tov4);
+    ///   2. tentar `netsh ... add` direto; se falhar, elevar via UAC oficial
+    ///      (Start-Process -Verb RunAs) propagando o exit code do netsh elevado;
+    ///   3. reler `show v4tov4` e confirmar a regra por token;
+    ///   4. confirmar com netstat que `<ip>:<porta>` está LISTENING;
+    ///   5. refazer o teste TCP nos dois endereços (check_port_status).
     pub fn apply_portproxy(&mut self) {
         #[cfg(target_os = "windows")]
         {
             let port = self.http_port.trim().to_string();
             let ip = self.lan_ip.trim().to_string();
-            let netsh_args = format!(
-                "interface portproxy add v4tov4 listenport={} listenaddress={} connectport={} connectaddress=127.0.0.1",
-                port, ip, port
-            );
-            let args_vec: Vec<&str> = netsh_args.split(' ').collect();
 
-            let direct = self.run_logged("netsh", &args_vec);
-            let direct_ok = direct
-                .as_ref()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
+            if ip == "127.0.0.1" || ip.eq_ignore_ascii_case("localhost") {
+                self.log_debug(
+                    "[portproxy] IP da LAN e loopback — regra nao faz sentido. Ajuste o campo IP.",
+                );
+                return;
+            }
+            if port.parse::<u16>().is_err() {
+                self.log_debug("[portproxy] Porta invalida — corrija o campo Porta.");
+                return;
+            }
 
-            if !direct_ok {
-                let combined = direct
-                    .as_ref()
-                    .map(|o| {
-                        format!(
-                            "{}{}",
-                            String::from_utf8_lossy(&o.stdout),
-                            String::from_utf8_lossy(&o.stderr)
-                        )
-                        .to_lowercase()
-                    })
-                    .unwrap_or_default();
+            // Etapa 1: regra já existe?
+            if self.portproxy_rule_exists(&ip, &port) {
+                self.log_debug(&format!(
+                    "[portproxy] Regra {}:{} -> 127.0.0.1:{} JA existe — pulando o add.",
+                    ip, port, port
+                ));
+            } else {
+                // Etapa 2: aplicar (direto; se falhar, elevado via UAC)
+                let netsh_args = format!(
+                    "interface portproxy add v4tov4 listenport={} listenaddress={} connectport={} connectaddress=127.0.0.1",
+                    port, ip, port
+                );
+                let args_vec: Vec<&str> = netsh_args.split(' ').collect();
 
-                let needs_elevation = direct.is_some()
-                    && (combined.contains("elev")   // "elevation" / "elevação"
-                        || combined.contains("admin")
-                        || combined.contains("denied")
-                        || combined.contains("negad")); // "negado/negada"
+                let direct_ok = self
+                    .run_logged("netsh", &args_vec)
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
 
-                if needs_elevation {
+                if direct_ok {
+                    self.log_debug("[portproxy] netsh add direto concluiu com exit 0.");
+                } else {
                     self.log_debug(
-                        "[portproxy] Privilegio insuficiente detectado — solicitando UAC...",
+                        "[portproxy] Tentativa direta falhou — solicitando elevacao (UAC)...",
                     );
+                    // -PassThru + exit $p.ExitCode: o exit code do netsh ELEVADO
+                    // chega até aqui. UAC cancelado => Start-Process lança erro
+                    // e o powershell sai com exit != 0.
                     let ps = format!(
-                        "Start-Process -FilePath netsh -ArgumentList '{}' -Verb RunAs -Wait",
+                        "$p = Start-Process -FilePath netsh -ArgumentList '{}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
                         netsh_args
                     );
                     match self.run_logged("powershell", &["-NoProfile", "-Command", ps.as_str()]) {
                         Some(o) if o.status.success() => {
-                            self.log_debug("[portproxy] UAC solicitado: comando elevado concluiu.")
+                            self.log_debug("[portproxy] netsh elevado concluiu com exit 0.")
                         }
-                        Some(_) => self.log_debug(
-                            "[portproxy] UAC solicitado: CANCELADO pelo usuario ou falhou.",
-                        ),
+                        Some(o) => self.log_debug(&format!(
+                            "[portproxy] netsh elevado FALHOU ou UAC foi cancelado (exit {:?}).",
+                            o.status.code()
+                        )),
                         None => {}
                     }
-                } else if direct.is_some() {
-                    self.log_debug("[portproxy] netsh falhou (motivo acima, nao parece ser privilegio).");
                 }
             }
 
-            // Validação final com a verdade do sistema
-            if let Some(show) = self.run_logged("netsh", &["interface", "portproxy", "show", "v4tov4"]) {
-                let text = String::from_utf8_lossy(&show.stdout).to_string();
-                if text.contains(port.as_str()) && text.contains(ip.as_str()) {
-                    self.log_debug(&format!(
-                        "[portproxy] Regra APLICADA: {}:{} -> 127.0.0.1:{}",
-                        ip, port, port
-                    ));
-                } else {
-                    self.log_debug("[portproxy] Regra NAO encontrada em 'show v4tov4'.");
+            // Etapa 3: reler a verdade do netsh
+            let rule_ok = self.portproxy_rule_exists(&ip, &port);
+            if rule_ok {
+                self.log_debug(&format!(
+                    "[portproxy] Regra CONFIRMADA no show v4tov4: {}:{} -> 127.0.0.1:{}",
+                    ip, port, port
+                ));
+            } else {
+                self.log_debug(
+                    "[portproxy] Regra NAO encontrada em 'show v4tov4' — nada foi aplicado.",
+                );
+            }
+
+            // Etapa 4: confirmar com netstat (o listener do portproxy e do iphlpsvc)
+            if let Ok(p) = port.parse::<u16>() {
+                let listening = self.netstat_lan_listening(&ip, p);
+                if rule_ok && !listening {
+                    self.log_debug(
+                        "[portproxy] AVISO: regra existe no netsh mas netstat NAO mostra o listener. Verifique o servico 'IP Helper' (iphlpsvc).",
+                    );
                 }
             }
         }
+        // Etapa 5: teste TCP real nos dois endereços + status
         self.check_port_status();
     }
 
@@ -741,27 +908,37 @@ impl eframe::App for FzComputerApp {
                         }
 
                         ui.add_space(10.0);
-                        if self.state.port_active {
-                            ui.label(
-                                egui::RichText::new(match self.state.language {
-                                    Language::PtBr => format!("● MCP HTTP Ativo (:{})", self.state.http_port),
-                                    Language::English => format!("● MCP HTTP Active (:{})", self.state.http_port),
-                                })
-                                .color(Color32::from_rgb(76, 175, 80))
+                        // Mesmo critério do status da aba MCP & Rede:
+                        // verde só com LAN confirmada pelo netstat + TCP.
+                        let (status_txt, status_color) = match self.state.port_status {
+                            crate::app::PortStatus::LanListening => (
+                                match self.state.language {
+                                    Language::PtBr => format!("● MCP HTTP Ativo (local + LAN) (:{})", self.state.http_port),
+                                    Language::English => format!("● MCP HTTP Active (local + LAN) (:{})", self.state.http_port),
+                                },
+                                Color32::from_rgb(76, 175, 80),
+                            ),
+                            crate::app::PortStatus::LocalOnly => (
+                                match self.state.language {
+                                    Language::PtBr => format!("● MCP HTTP Local apenas (:{})", self.state.http_port),
+                                    Language::English => format!("● MCP HTTP Local only (:{})", self.state.http_port),
+                                },
+                                Color32::from_rgb(255, 193, 7),
+                            ),
+                            crate::app::PortStatus::Stopped => (
+                                match self.state.language {
+                                    Language::PtBr => "● MCP HTTP Parado".to_string(),
+                                    Language::English => "● MCP HTTP Stopped".to_string(),
+                                },
+                                Color32::from_rgb(239, 83, 80),
+                            ),
+                        };
+                        ui.label(
+                            egui::RichText::new(status_txt)
+                                .color(status_color)
                                 .strong()
                                 .size(13.0)
-                            );
-                        } else {
-                            ui.label(
-                                egui::RichText::new(match self.state.language {
-                                    Language::PtBr => "● MCP HTTP Parado",
-                                    Language::English => "● MCP HTTP Stopped",
-                                })
-                                .color(Color32::from_rgb(239, 83, 80))
-                                .strong()
-                                .size(13.0)
-                            );
-                        }
+                        );
                     });
                 });
             });
@@ -781,9 +958,19 @@ impl eframe::App for FzComputerApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new("Grupo FazAI | Webstorage Tecnologia | Imóvel Site")
+                            egui::RichText::new("Grupo FazAI | Webstorage Tecnologia")
                                 .size(12.0)
                                 .color(Color32::from_rgb(140, 140, 140))
+                        );
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new(match self.state.language {
+                                Language::PtBr => "Doações / Donate: +55 51 99242539",
+                                Language::English => "Donate: +55 51 99242539",
+                            })
+                            .size(12.0)
+                            .strong()
+                            .color(Color32::from_rgb(76, 175, 80))
                         );
                     });
                 });

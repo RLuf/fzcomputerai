@@ -232,24 +232,39 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
 brazilianportuguese.GroupAdditional=Opcoes adicionais:
-brazilianportuguese.GroupComponents=Componentes opcionais:
+brazilianportuguese.GroupComponents=Motor de automacao:
 brazilianportuguese.TaskAutostart=Iniciar o FzComputerAI com o Windows
-brazilianportuguese.TaskCuaDriver=Instalar o motor cua-driver (requer internet)
+brazilianportuguese.TaskCuaDriver=Instalar o motor cua-driver (NECESSARIO para controlar a maquina; requer internet)
 brazilianportuguese.RunCuaDriverDesc=Instalar agora o motor cua-driver {#CuaDriverVersion} (abre uma janela do PowerShell)
+brazilianportuguese.WarnNoEngine=Voce desmarcou a instalacao do motor cua-driver.%n%nO cua-driver NAO e um extra: e o motor que executa clique, digitacao, captura de tela e todas as demais acoes. Sem ele o FzComputerAI abre normalmente, mas NENHUM botao funciona - toda acao termina em "nao foi possivel executar 'cua-driver'".%n%nA instalacao vai continuar. Se preferir, instale o motor depois pelo proprio aplicativo (botao "Instalar motor cua-driver") ou execute novamente este instalador com a opcao marcada.
 brazilianportuguese.UninstallDriverNotice=O FzComputerAI foi removido.%n%nO motor cua-driver NAO foi desinstalado: ele possui gerenciador e desinstalador proprios.%n%nPara remove-lo, consulte https://github.com/trycua/cua
 
 english.GroupAdditional=Additional options:
-english.GroupComponents=Optional components:
+english.GroupComponents=Automation engine:
 english.TaskAutostart=Start FzComputerAI with Windows
-english.TaskCuaDriver=Install the cua-driver engine (requires internet)
+english.TaskCuaDriver=Install the cua-driver engine (REQUIRED to control the machine; needs internet)
 english.RunCuaDriverDesc=Install the cua-driver {#CuaDriverVersion} engine now (opens a PowerShell window)
+english.WarnNoEngine=You unchecked the cua-driver engine.%n%ncua-driver is not an extra: it is the engine that performs clicking, typing, screen capture and every other action. Without it FzComputerAI still opens, but NO button works - every action ends in "cannot execute 'cua-driver'".%n%nSetup will continue. You can install the engine later from the application itself (the "Install cua-driver engine" button) or by running this installer again with the option checked.
 english.UninstallDriverNotice=FzComputerAI has been removed.%n%nThe cua-driver engine was NOT uninstalled: it ships its own manager and uninstaller.%n%nTo remove it, see https://github.com/trycua/cua
 
 
 [Tasks]
+; O motor cua-driver vem MARCADO por padrao - NAO acrescente "Flags: unchecked"
+; nesta entrada. Toda acao da GUI e um Command::new("cua-driver") (ver
+; fzcomputerai/src/app.rs): sem o motor no PATH o programa abre e nenhum botao
+; funciona. Instalar so a GUI por padrao era prometer um produto que nao
+; controla a maquina. Quem desmarcar recebe o aviso de WarnNoEngine
+; (NextButtonClick, secao [Code]) - avisa, mas nao bloqueia.
+;
+; Por que Tasks e nao Components: [Components] sugere "partes do produto que eu
+; copio para o disco", e o motor nao e copiado - ele e baixado e instalado pelo
+; instalador OFICIAL do cua, que tem gerenciador e desinstalador proprios (ver
+; UninstallDriverNotice). A ligacao "Tasks: cuadriver" das entradas [Run] ja
+; expressa exatamente isso: uma ACAO pos-instalacao. Trocar para Components
+; exigiria [Types] + Components em todas as entradas sem ganho funcional.
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "autostart";   Description: "{cm:TaskAutostart}";     GroupDescription: "{cm:GroupAdditional}"
-Name: "cuadriver";   Description: "{cm:TaskCuaDriver}";     GroupDescription: "{cm:GroupComponents}"; Flags: unchecked
+Name: "cuadriver";   Description: "{cm:TaskCuaDriver}";     GroupDescription: "{cm:GroupComponents}"
 
 
 [Files]
@@ -261,6 +276,21 @@ Source: "LICENSE.txt";  DestDir: "{app}"; Flags: ignoreversion
 ; inspecionado em {app}\cua-driver\). Se o submodulo `cua` nao estiver
 ; inicializado no momento da compilacao, estes arquivos simplesmente nao
 ; entram no pacote e o [Run] usa o endpoint oficial cua.ai como fallback.
+;
+; ===== CONTRATO COM A GUI - NAO MUDE ESTES CAMINHOS =====================
+; A GUI detecta a ausencia do motor e oferece o botao "Instalar motor
+; cua-driver", que procura o script embarcado em:
+;
+;     <diretorio do executavel>\cua-driver\install.ps1
+;
+; Como o executavel e instalado em {app} (entrada Source do topo desta secao),
+; o DestDir aqui TEM de ser exatamente "{app}\cua-driver" - nao "{app}\cua",
+; nem "{app}\scripts", nem um subnivel a mais. O modulo _install-common.psm1 e
+; importado pelo install.ps1 por caminho relativo ao proprio script, entao ele
+; precisa ficar no MESMO diretorio.
+; Se algum dia o layout mudar, mude junto o caminho lido pela GUI em
+; fzcomputerai/src/app.rs - os dois lados formam um contrato so.
+; ========================================================================
 Source: "{#CuaScriptsDir}\install.ps1";          DestDir: "{app}\cua-driver"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#CuaScriptsDir}\_install-common.psm1"; DestDir: "{app}\cua-driver"; Flags: ignoreversion skipifsourcedoesntexist
 
@@ -289,10 +319,30 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 
 [Run]
-; --- Motor cua-driver (opcional, nao-fatal) --------------------------------
-; O Inno ignora o codigo de saida de entradas [Run]: se o instalador do driver
-; falhar (sem internet, release indisponivel, UAC cancelado), a instalacao da
-; GUI ja terminou e permanece intacta.
+; --- Motor cua-driver (marcado por padrao, mas NAO-FATAL) ------------------
+; A task vem marcada (o motor nao e opcional - ver [Tasks]), o que torna ainda
+; mais importante que uma falha aqui NAO derrube a instalacao da GUI. E o que
+; acontece hoje, por tres razoes somadas:
+;   1) `postinstall`: estas entradas so rodam DEPOIS que os arquivos ja foram
+;      gravados e o setup ja e um sucesso - aparecem como checkbox na pagina
+;      final. Cancelar ali nao desfaz nada.
+;   2) O Inno IGNORA o codigo de saida de entradas [Run]. Sem internet, release
+;      indisponivel, UAC cancelado ou script abortado: o instalador termina
+;      normalmente, com a GUI intacta e utilizavel (sem controlar a maquina,
+;      como o aviso WarnNoEngine explica).
+;   3) `skipifdoesntexist`: se o powershell.exe do caminho indicado nao existir
+;      (Windows sem Windows PowerShell 5.x), a entrada e pulada em silencio em
+;      vez de gerar "Unable to execute file".
+; Nao acrescente aqui nada que altere isso - em especial NAO use uma entrada
+; nao-postinstall com checagem de erro para o driver.
+;
+; INSTALACAO SILENCIOSA (documentado de proposito): com /VERYSILENT a task
+; `cuadriver` continua marcada por padrao, mas estas entradas tem
+; `skipifsilent` e portanto NAO rodam - deploy silencioso instala a GUI e nao
+; o motor. E deliberado: baixar uma release da internet e disparar um UAC
+; (Scheduled Task do driver) no meio de uma instalacao desassistida seria pior.
+; Em massa, instale o motor separadamente (o proprio install.ps1 do cua) ou
+; deixe o usuario usar o botao "Instalar motor cua-driver" da GUI.
 ;
 ; NOTA - por que NAO usamos "runhidden" aqui: o install.ps1 oficial do cua
 ; baixa uma release do GitHub (pode demorar) e, com -AutoStart (default), faz
@@ -334,6 +384,64 @@ end;
 function CuaScriptNotEmbedded: Boolean;
 begin
   Result := not CuaScriptEmbedded;
+end;
+
+var
+  EngineWarningShown: Boolean;
+  DriverProbeDone:    Boolean;
+  DriverProbeFound:   Boolean;
+
+// Detecta se o motor cua-driver JA existe nesta maquina, perguntando ao
+// proprio Windows onde ele esta ("where" percorre o PATH). Serve so para
+// decidir se vale a pena avisar: quem ja tem o motor instalado e desmarca a
+// task esta apenas evitando reinstalar, e nao merece um alerta.
+//
+// Detalhes que importam:
+//  - SW_HIDE + redirecionamento: nenhuma janela de console pisca na tela.
+//  - O resultado e cacheado (DriverProbeDone) porque NextButtonClick pode ser
+//    chamado varias vezes se o usuario navegar para tras e para a frente.
+//  - Se o proprio Exec falhar, assumimos "nao instalado" e avisamos. Errar
+//    para o lado do aviso e melhor do que deixar o usuario com uma GUI muda.
+//  - PATH aqui e o herdado pelo processo do instalador. Um motor instalado
+//    depois que este setup abriu pode nao ser visto - de novo, o pior caso e
+//    um aviso a mais.
+function CuaDriverAlreadyInstalled: Boolean;
+var
+  ResultCode: Integer;
+begin
+  if not DriverProbeDone then
+  begin
+    DriverProbeDone  := True;
+    DriverProbeFound := False;
+    if Exec(ExpandConstant('{cmd}'), '/C where cua-driver.exe >nul 2>&1', '',
+            SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      DriverProbeFound := (ResultCode = 0);
+  end;
+  Result := DriverProbeFound;
+end;
+
+// AVISA, mas NAO BLOQUEIA. Se o usuario desmarcar o motor na pagina de tarefas
+// ele recebe uma explicacao do que exatamente vai deixar de funcionar (a GUI
+// abre, os botoes nao) e de como instalar depois. Result e sempre True: a
+// escolha continua sendo dele.
+//
+// Mostrado no maximo uma vez por execucao (EngineWarningShown) para nao virar
+// um pedagio a cada ida e volta no wizard, e omitido quando o motor ja esta
+// instalado na maquina.
+//
+// Em instalacao silenciosa nada disso roda - o wizard nao tem paginas e
+// NextButtonClick nao e chamado. Ver a nota sobre /VERYSILENT em [Run].
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+
+  if (CurPageID = wpSelectTasks) and (not EngineWarningShown) and
+     (not WizardIsTaskSelected('cuadriver')) and
+     (not CuaDriverAlreadyInstalled) then
+  begin
+    EngineWarningShown := True;
+    MsgBox(ExpandConstant('{cm:WarnNoEngine}'), mbInformation, MB_OK);
+  end;
 end;
 
 const

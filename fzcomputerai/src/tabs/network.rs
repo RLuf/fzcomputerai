@@ -1,4 +1,4 @@
-use crate::app::{AppState, Language};
+use crate::app::{AppState, Language, PortStatus};
 use egui::{Color32, Frame, Margin, RichText, Rounding, Ui, Vec2};
 
 pub fn render(ui: &mut Ui, state: &mut AppState) {
@@ -39,10 +39,33 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         ui.label(&state.http_port);
                         ui.label(&state.lan_ip);
                         ui.label(RichText::new("HTTP / JSON-RPC").color(Color32::from_rgb(255, 167, 38)));
-                        if state.port_active {
-                            ui.label(RichText::new("LISTENING").color(Color32::from_rgb(76, 175, 80)).strong());
-                        } else {
-                            ui.label(RichText::new("STOPPED").color(Color32::from_rgb(239, 83, 80)).strong());
+                        // Verde SOMENTE com netstat mostrando <ip_lan>:<porta>
+                        // LISTENING e TCP na LAN conectando (check_port_status).
+                        match state.port_status {
+                            PortStatus::LanListening => {
+                                ui.label(
+                                    RichText::new("LISTENING (local + LAN)")
+                                        .color(Color32::from_rgb(76, 175, 80))
+                                        .strong(),
+                                );
+                            }
+                            PortStatus::LocalOnly => {
+                                ui.label(
+                                    RichText::new(match state.language {
+                                        Language::PtBr => "LOCAL APENAS",
+                                        Language::English => "LOCAL ONLY",
+                                    })
+                                    .color(Color32::from_rgb(255, 193, 7))
+                                    .strong(),
+                                );
+                            }
+                            PortStatus::Stopped => {
+                                ui.label(
+                                    RichText::new("STOPPED")
+                                        .color(Color32::from_rgb(239, 83, 80))
+                                        .strong(),
+                                );
+                            }
                         }
                         ui.end_row();
                     });
@@ -66,6 +89,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         ui.output_mut(|o| o.copied_text = mcp_url.clone());
                     }
                 });
+
+                if state.port_status != PortStatus::LanListening {
+                    ui.label(
+                        RichText::new(match state.language {
+                            Language::PtBr => "Atenção: esta URL ainda NÃO está acessível pela LAN (veja o Status).",
+                            Language::English => "Warning: this URL is NOT reachable from the LAN yet (see Status).",
+                        })
+                        .size(11.0)
+                        .color(Color32::from_rgb(255, 193, 7)),
+                    );
+                }
 
                 ui.add_space(16.0);
 
