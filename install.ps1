@@ -48,29 +48,10 @@ function Write-Err([string]$msg) {
     Write-Host "[ERRO] $msg" -ForegroundColor Red
 }
 
-function Set-FzCodeSigning([string]$exePath) {
-    if ($exePath -and (Test-Path $exePath)) {
-        Write-Info "Aplicando autoassinatura de codigo (Authenticode) em: $exePath"
-        try {
-            $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object { $_.Subject -like "*FzComputerAI*" } | Select-Object -First 1
-            if (-not $cert) {
-                Write-Info "Gerando novo Certificado Digital de Codigo (CN=FzComputerAI)..."
-                $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=FzComputerAI (Webstorage Tecnologia)" -CertStoreLocation "Cert:\CurrentUser\My"
-                $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
-                $rootStore.Open("ReadWrite")
-                $rootStore.Add($cert)
-                $rootStore.Close()
-                Write-Success "Certificado gerado e instalado na Raiz Confiavel (Cert:\CurrentUser\Root)."
-            } else {
-                Write-Info "Utilizando certificado existente: $($cert.Thumbprint)"
-            }
-            Set-AuthenticodeSignature -FilePath $exePath -Certificate $cert -ErrorAction SilentlyContinue | Out-Null
-            Write-Success "Binario assinado digitalmente com sucesso!"
-        } catch {
-            Write-Warn "Nao foi possivel aplicar a autoassinatura de codigo: $_"
-        }
-    }
-}
+# NAO adicione aqui geracao de certificado auto-assinado nem instalacao de CA no
+# store Root do usuario. Certificado auto-assinado nao remove o aviso do SmartScreen
+# e instalar uma raiz confiavel na maquina de quem instala e comportamento de malware.
+# O unico caminho legitimo esta em SIGNING.md (cert OV/EV em token + scripts/sign-release.ps1).
 
 Write-Header
 
@@ -121,8 +102,7 @@ if ($hasCargo -and (Test-Path $guiCargoPath)) {
         & cargo build --release
         if ($LASTEXITCODE -eq 0) {
             $guiBin = Join-Path (Split-Path -Parent $guiCargoPath) "target\release\fzcomputerai.exe"
-            Set-FzCodeSigning -exePath $guiBin
-            Write-Success "Interface grafica FzComputerAI compilada e assinada em $guiBin"
+            Write-Success "Interface grafica FzComputerAI compilada em $guiBin"
         } else {
             Write-Warn "Falha ao compilar a GUI Rust. O servidor MCP continuara funcionando normalmente."
         }
@@ -144,8 +124,7 @@ if ($hasCargo -and (Test-Path $rustWorkspacePath)) {
         & cargo build --release --package cua-driver
         if ($LASTEXITCODE -eq 0) {
             $BinPath = Join-Path (Split-Path -Parent $rustWorkspacePath) "target\release\cua-driver.exe"
-            Set-FzCodeSigning -exePath $BinPath
-            Write-Success "Compilacao do motor concluida e assinada em: $BinPath"
+            Write-Success "Compilacao do motor concluida em: $BinPath"
         } else {
             Write-Warn "Falha na compilacao local via Cargo. Buscando instalacoes alternativas..."
         }

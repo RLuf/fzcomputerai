@@ -5,9 +5,20 @@ on:
     tags:
       - 'v*'
 
+# Variaveis compartilhadas pelos DOIS jobs (build-release e publish-release).
+# `env` de nivel de workflow e visivel em `steps.*.run`, `steps.*.with` e
+# `steps.*.if` de qualquer job — por isso INSTALLER_NAME mora aqui e nao mais
+# dentro do job da matriz.
+env:
+  INNO_SCRIPT: installer/fzcomputerai.iss
+  INSTALLER_NAME: fzcomputerai-setup-windows-x64.exe
+  # Versao do pacote chocolatey `innosetup` usada APENAS no fallback (ver o
+  # bloco "INSTALADOR WINDOWS" abaixo). Fixada para builds reproduziveis.
+  INNO_SETUP_VERSION: '6.7.1'
+
 jobs:
   build-release:
-    name: Build & Code-Sign (${{ matrix.os }})
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,10 +34,40 @@ jobs:
             artifact_name: fzcomputerai
             asset_name: fzcomputerai-linux-x64
 
+    # Este job NAO publica release (quem publica e o job `publish-release`),
+    # entao nao precisa de contents:write.
     permissions:
-      contents: write
+      contents: read
+
+    # O contexto `secrets` NAO esta disponivel em `steps.*.if` (so em `jobs.<id>.env`,
+    # `with:` e `env:`). Por isso convertemos a presenca do segredo para uma string
+    # 'true'/'false' aqui, e os steps testam `env.HAS_WINDOWS_CERT`.
+    env:
+      HAS_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
 
     steps:
+      # ------------------------------------------------------------------
+      # ATENCAO — SUBMODULO `cua` NAO E MATERIALIZADO NESTE CHECKOUT
+      # ------------------------------------------------------------------
+      # O diretorio `cua/` esta registrado no indice do git como um GITLINK
+      # (modo 160000, commit 3b5de648...), MAS o repositorio NAO tem `.gitmodules`.
+      # Sem `.gitmodules` nao existe URL de origem, logo `actions/checkout` nunca
+      # consegue clonar nada ali — nem com `submodules: true` (seria um no-op) —
+      # e `cua/` fica como um diretorio VAZIO no runner.
+      #
+      # CONSEQUENCIA PRATICA no instalador (installer/fzcomputerai.iss):
+      #   As entradas [Files] que embarcariam os scripts oficiais do cua-driver
+      #     ..\cua\libs\cua-driver\scripts\install.ps1
+      #     ..\cua\libs\cua-driver\scripts\_install-common.psm1
+      #   usam `skipifsourcedoesntexist`, entao sao SILENCIOSAMENTE DESCARTADAS.
+      #   Portanto 100% dos instaladores publicados por este workflow caem no
+      #   "Caminho 2" do [Run]: o fallback de rede `irm https://cua.ai/driver/install.ps1`.
+      #   NAO acredite que o script vai embarcado — hoje ele nao vai.
+      #
+      # Resolver isso (criar .gitmodules / vendorizar os scripts) esta FORA do
+      # escopo deste arquivo e e alteracao de risco. Este comentario existe para
+      # que ninguem leia o .iss e conclua o contrario.
+      # ------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -42,6 +83,8 @@ jobs:
           grep -n '^version = ' fzcomputerai/Cargo.toml
           echo "--- package.json ---"
           grep -n '"version":' package.json
+          # Disponibiliza a versao (sem o 'v') para os steps seguintes (ISCC /DAppVersion=)
+          echo "APP_VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Install Linux GUI Dependencies
         if: runner.os == 'Linux'
@@ -67,45 +110,497 @@ jobs:
         run: |
           cargo build --release --manifest-path fzcomputerai/Cargo.toml
 
-      - name: Auto-Sign Windows Executable (Authenticode)
-        if: runner.os == 'Windows'
-        shell: powershell
+      # ------------------------------------------------------------------
+      # ASSINATURA DE CODIGO (Authenticode) — OPCIONAL E CONDICIONAL
+      # ------------------------------------------------------------------
+      # REALIDADE (nao apague este comentario):
+      #  - Nao existe "assinar durante a instalacao". Authenticode exige a chave
+      #    privada do publisher ANTES da distribuicao.
+      #  - Certificado self-signed gerado no CI NAO evita o SmartScreen: ele nao
+      #    encadeia em nenhuma CA confiavel e, sendo novo a cada build, nunca
+      #    acumula reputacao. Por isso o antigo step "Auto-Sign" foi REMOVIDO.
+      #  - Desde junho/2023 (Baseline Requirements do CA/Browser Forum) certificados
+      #    OV/EV de code signing so existem em token USB / HSM — nao ha mais PFX
+      #    exportavel para certificados OV/EV emitidos depois dessa data. Logo, o
+      #    "Caminho 1" abaixo serve principalmente para HSM em nuvem / eSigner /
+      #    cert antigo. (Mesma data citada em SIGNING.md e scripts/sign-release.ps1.)
+      #  - O FLUXO REALISTA para este projeto e assinar LOCALMENTE na maquina onde o
+      #    token USB esta plugado: ver scripts/sign-release.ps1.
+      # ------------------------------------------------------------------
+
+      - name: Locate signtool.exe (Windows SDK)
+        id: signtool
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_CERT == 'true'
+        shell: pwsh
         run: |
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=FzComputerAI (Webstorage Tecnologia)" -CertStoreLocation "Cert:\CurrentUser\My"
-          Set-AuthenticodeSignature -FilePath "fzcomputerai/target/release/fzcomputerai.exe" -Certificate $cert
-          Copy-Item "fzcomputerai/target/release/fzcomputerai.exe" "${{ matrix.asset_name }}"
+          $ErrorActionPreference = 'Stop'
+          $candidates = @()
+          $cmd = Get-Command signtool.exe -ErrorAction SilentlyContinue
+          if ($cmd) { $candidates += $cmd.Source }
+          $candidates += Get-ChildItem -Path 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter 'signtool.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\' } |
+            Sort-Object FullName -Descending |
+            ForEach-Object { $_.FullName }
+          $signtool = $candidates | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe nao encontrado no runner (Windows SDK ausente).' }
+          Write-Host "signtool: $signtool"
+          "path=$signtool" >> $env:GITHUB_OUTPUT
+
+      - name: Decode Code-Signing Certificate (PFX from secret)
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_CERT == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          Write-Host "PFX temporario gravado em $pfxPath"
+          "CODESIGN_PFX=$pfxPath" >> $env:GITHUB_ENV
+
+      # Falha ANTES de chamar o signtool: sem esta validacao o PowerShell
+      # simplesmente OMITE o argumento de uma variavel vazia/nula. A linha
+      #     signtool sign /f cert.pfx /p $env:WINDOWS_CERT_PASSWORD /fd SHA256 ...
+      # vira, com a senha vazia,
+      #     signtool sign /f cert.pfx /p /fd SHA256 ...
+      # e o signtool consome "/fd" COMO SE FOSSE A SENHA, devolvendo um erro de
+      # senha/algoritmo incorreto que nao tem nada a ver com a causa real.
+      - name: Validate Code-Signing Password (fail fast)
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_CERT == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)) {
+            Write-Host '::error title=WINDOWS_CERT_PASSWORD ausente::O segredo WINDOWS_CERT_PFX_BASE64 esta configurado, mas WINDOWS_CERT_PASSWORD esta vazio ou nao existe.'
+            Write-Host 'Corrija cadastrando o segredo WINDOWS_CERT_PASSWORD com a senha do PFX.'
+            Write-Host 'Se o seu PFX realmente nao tem senha, reexporte-o COM uma senha: este workflow'
+            Write-Host 'nao suporta PFX sem senha, porque um argumento /p vazio e engolido pelo PowerShell'
+            Write-Host 'e o signtool passa a interpretar o proximo argumento (/fd) como se fosse a senha.'
+            throw 'WINDOWS_CERT_PASSWORD vazio: abortando antes de invocar o signtool.'
+          }
+          Write-Host 'WINDOWS_CERT_PASSWORD presente (valor nao exibido).'
+
+      - name: Sign Windows Executable (signtool)
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_CERT == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'fzcomputerai/target/release/fzcomputerai.exe'
+          # Rede de seguranca: o step "Validate Code-Signing Password" ja abortou
+          # o job se a senha estivesse vazia, mas repetimos aqui para que uma
+          # reordenacao futura de steps nao reintroduza o /p engolido.
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)) { throw 'WINDOWS_CERT_PASSWORD vazio.' }
+          # /tr (timestamp RFC3161) e OBRIGATORIO: sem ele a assinatura deixa de ser
+          # valida no dia em que o certificado expirar.
+          & '${{ steps.signtool.outputs.path }}' sign `
+            /f $env:CODESIGN_PFX `
+            /p $env:WINDOWS_CERT_PASSWORD `
+            /fd SHA256 `
+            /tr http://timestamp.digicert.com `
+            /td SHA256 `
+            /v $exe
+          if ($LASTEXITCODE -ne 0) { throw "signtool falhou ao assinar $exe (exit $LASTEXITCODE)" }
+          & '${{ steps.signtool.outputs.path }}' verify /pa /v $exe
+
+      # ------------------------------------------------------------------
+      # CAMINHO 2 (FUTURO) — Azure Trusted Signing / Azure Artifact Signing.
+      # Mantido COMENTADO de proposito.
+      # NOTA: hoje (jul/2026) o Azure Trusted Signing (US$ 9,99/mes) so valida
+      # identidade de empresas/autonomos de EUA, Canada, Uniao Europeia e Reino
+      # Unido. BRASIL NAO E ELEGIVEL — este bloco so podera ser usado se/quando a
+      # elegibilidade for estendida, ou via entidade legal em regiao elegivel.
+      #
+      # - name: Azure Login (OIDC)
+      #   if: runner.os == 'Windows' && env.HAS_AZURE_SIGNING == 'true'
+      #   uses: azure/login@v2
+      #   with:
+      #     client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      #
+      # - name: Sign with Azure Trusted Signing
+      #   if: runner.os == 'Windows' && env.HAS_AZURE_SIGNING == 'true'
+      #   uses: azure/trusted-signing-action@v0
+      #   with:
+      #     endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      #     trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      #     certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+      #     files-folder: fzcomputerai/target/release
+      #     files-folder-filter: exe
+      #     file-digest: SHA256
+      #     timestamp-rfc3161: http://timestamp.acs.microsoft.com
+      #     timestamp-digest: SHA256
+      # ------------------------------------------------------------------
+
+      - name: Warn — Binaries are NOT code-signed
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_CERT != 'true'
+        shell: bash
+        run: |
+          echo "::warning title=Binarios NAO assinados::Nenhum segredo WINDOWS_CERT_PFX_BASE64 configurado."
+          echo "Os binarios Windows deste release NAO estao assinados (Authenticode)."
+          echo "Consequencia: o SmartScreen exibira 'O Windows protegeu o seu computador'."
+          echo "O usuario precisara clicar em 'Mais informacoes' > 'Executar assim mesmo'."
+          echo "Isso vale IGUALMENTE para o .exe e para o instalador — instalador nao assinado"
+          echo "recebe exatamente o mesmo aviso. O build NAO falha por isso."
+
+      - name: Prepare Windows Artifact
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cp fzcomputerai/target/release/fzcomputerai.exe "${{ matrix.asset_name }}"
 
       - name: Rename Non-Windows Artifacts
         if: runner.os != 'Windows'
         run: |
           cp fzcomputerai/target/release/fzcomputerai ${{ matrix.asset_name }}
 
-      - name: Generate SHA256 Checksum
+      # ------------------------------------------------------------------
+      # INSTALADOR WINDOWS (Inno Setup 6)
+      # ------------------------------------------------------------------
+      # ESTADO VERIFICADO EM 26/07/2026 (ao revisar, atualize a data e as evidencias):
+      #  - `windows-latest` resolve para Windows Server 2025 (tabela "Available
+      #    Images" do README de actions/runner-images: "windows-latest,
+      #    windows-2025, ou windows-2025-vs2026").
+      #  - A imagem 2025 TRAZ o Inno Setup pre-instalado: a linha "- InnoSetup 6.7.1"
+      #    aparece em images/windows/Windows2025-Readme.md (imagem 20260719.202.1)
+      #    e tambem em images/windows/Windows2022-Readme.md. Ele entra pela lista de
+      #    pacotes chocolatey de images/windows/toolsets/toolset-2025.json
+      #    ({ "name": "innosetup" }) — ou seja, layout padrao do pacote choco, que
+      #    instala em C:\Program Files (x86)\Inno Setup 6\ISCC.exe.
+      #
+      # PORQUE AINDA EXISTE FALLBACK: o conteudo da imagem NAO e contrato. O time do
+      # runner-images adiciona/remove ferramentas sem major bump e sem aviso previo
+      # (o Inno ja foi anunciado para remocao no passado). Se um dia sumir, o job
+      # Windows quebraria no meio de um release. Por isso: detecta -> se faltar, instala.
+      #
+      # O FALLBACK INTRODUZ DEPENDENCIA DE REDE: `choco install` baixa metadados de
+      # community.chocolatey.org e o instalador do site do Inno Setup. Feed fora do ar,
+      # rate limit do chocolatey ou versao despublicada (unlisted) => job Windows FALHA
+      # neste step. Nao ha mirror interno configurado.
+      #
+      # A versao do fallback e FIXADA em env.INNO_SETUP_VERSION para builds
+      # reproduziveis (sem `--version` o choco pegaria "a mais nova de hoje").
+      # Ao subir esse valor, confirme antes que a versao existe no feed.
+      #
+      # Nao emitimos ::warning aqui: o warning aparecia no resumo de TODO run mesmo
+      # no caminho feliz. O que aconteceu vai para o log e para o GITHUB_STEP_SUMMARY.
+      # ------------------------------------------------------------------
+      - name: Setup Inno Setup (ISCC)
+        id: iscc
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Find-Iscc {
+            # Caminho padrao do pacote choco `innosetup` (x64 e x86), depois PATH.
+            $paths = @(
+              'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+              'C:\Program Files\Inno Setup 6\ISCC.exe'
+            )
+            foreach ($p in $paths) { if (Test-Path $p) { return $p } }
+            $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            return $null
+          }
+          $iscc = Find-Iscc
+          $origem = 'pre-instalado na imagem do runner'
+          if (-not $iscc) {
+            $origem = "instalado via chocolatey (innosetup $env:INNO_SETUP_VERSION) — dependencia de rede"
+            Write-Host "Inno Setup ausente na imagem; instalando innosetup $env:INNO_SETUP_VERSION via chocolatey..."
+            choco install innosetup --version=$env:INNO_SETUP_VERSION -y --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              throw "choco install innosetup --version=$env:INNO_SETUP_VERSION falhou (exit $LASTEXITCODE). Feed do chocolatey indisponivel ou versao despublicada — ajuste env.INNO_SETUP_VERSION."
+            }
+            $iscc = Find-Iscc
+          }
+          if (-not $iscc) { throw 'ISCC.exe nao encontrado mesmo apos choco install innosetup.' }
+          # Nao invocamos "ISCC /?" so para logar versao: o ISCC retorna exit code != 0
+          # ao imprimir a ajuda, o que faria o step falhar.
+          $versao = (Get-Item $iscc).VersionInfo.ProductVersion
+          Write-Host "ISCC: $iscc"
+          Write-Host "Versao do arquivo: $versao"
+          Write-Host "Origem: $origem"
+          "- Inno Setup: ``$versao`` ($origem)" >> $env:GITHUB_STEP_SUMMARY
+          "path=$iscc" >> $env:GITHUB_OUTPUT
+
+      - name: Build Windows Installer (Inno Setup)
+        id: build_installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = $env:INNO_SCRIPT
+          if (-not (Test-Path $script)) {
+            Write-Host "::error title=Script Inno Setup ausente::$script nao existe no repositorio; o instalador NAO sera gerado neste release."
+            "built=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $sourceExe = (Resolve-Path 'fzcomputerai\target\release\fzcomputerai.exe').Path
+          New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
+          Write-Host "AppVersion = $env:APP_VERSION"
+          Write-Host "SourceExe  = $sourceExe"
+          & '${{ steps.iscc.outputs.path }}' "/DAppVersion=$env:APP_VERSION" "/DSourceExe=$sourceExe" $script
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falhou (exit $LASTEXITCODE)" }
+          $out = Join-Path 'dist' $env:INSTALLER_NAME
+          if (-not (Test-Path $out)) { throw "ISCC terminou com sucesso mas $out nao foi gerado (confira OutputDir/OutputBaseFilename no .iss)." }
+          Get-Item $out | Format-List Name, Length, LastWriteTime
+          "built=true" >> $env:GITHUB_OUTPUT
+
+      - name: Sign Windows Installer (signtool)
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_CERT == 'true' && steps.build_installer.outputs.built == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path 'dist' $env:INSTALLER_NAME
+          # Mesma rede de seguranca do step que assina o .exe: /p vazio vira
+          # "signtool ... /p /fd SHA256" e o /fd e lido como se fosse a senha.
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERT_PASSWORD)) { throw 'WINDOWS_CERT_PASSWORD vazio.' }
+          & '${{ steps.signtool.outputs.path }}' sign `
+            /f $env:CODESIGN_PFX `
+            /p $env:WINDOWS_CERT_PASSWORD `
+            /fd SHA256 `
+            /tr http://timestamp.digicert.com `
+            /td SHA256 `
+            /v $installer
+          if ($LASTEXITCODE -ne 0) { throw "signtool falhou ao assinar $installer (exit $LASTEXITCODE)" }
+          & '${{ steps.signtool.outputs.path }}' verify /pa /v $installer
+
+      - name: Remove temporary PFX
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          if (Test-Path $pfxPath) {
+            Remove-Item $pfxPath -Force
+            Write-Host "PFX temporario removido: $pfxPath"
+          } else {
+            Write-Host 'Nenhum PFX temporario a remover.'
+          }
+
+      # O instalador nasce em dist\. Copiamos para a RAIZ do workspace, ao lado do
+      # binario standalone, para que o checksum seja gerado com o NOME BASE.
+      # (Ver o comentario do step "Generate SHA256 Checksums".)
+      - name: Stage Installer Next to Standalone Binary
+        if: runner.os == 'Windows' && steps.build_installer.outputs.built == 'true'
         shell: bash
         run: |
-          # sha256sum existe no Linux e no Git Bash (Windows); macOS usa shasum
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
-          else
-            shasum -a 256 "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
-          fi
-          cat "${{ matrix.asset_name }}.sha256"
+          set -euo pipefail
+          cp "dist/${INSTALLER_NAME}" "./${INSTALLER_NAME}"
+          ls -l "./${INSTALLER_NAME}"
 
-      - name: Publish GitHub Release Artifact
-        uses: softprops/action-gh-release@v2
+      - name: Generate SHA256 Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          # O .sha256 grava LITERALMENTE o caminho recebido no argumento. Se
+          # passarmos "dist/fzcomputerai-setup-windows-x64.exe", o arquivo contem
+          # "<hash>  dist/fzcomputerai-setup-windows-x64.exe" e o `sha256sum -c`
+          # FALHA para quem baixou o instalador e o .sha256 soltos na mesma pasta
+          # (ele procuraria por um subdiretorio dist/ que nao existe).
+          # Por isso todos os artefatos sao hasheados pelo NOME BASE, a partir do
+          # diretorio onde estao — identico ao formato usado no .exe standalone.
+          hash_file() {
+            # sha256sum existe no Linux e no Git Bash (Windows); macOS usa shasum
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" > "$1.sha256"
+            else
+              shasum -a 256 "$1" > "$1.sha256"
+            fi
+            cat "$1.sha256"
+          }
+          hash_file "${{ matrix.asset_name }}"
+          if [ -f "${INSTALLER_NAME}" ]; then
+            hash_file "${INSTALLER_NAME}"
+          fi
+
+      # Nada e publicado aqui. Os arquivos vao para um artifact e o job
+      # `publish-release` (unico, apos a matriz) monta o release final.
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: release-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
-          body: |
-            ## FzComputerAI ${{ github.ref_name }} — Standalone Binaries (Multiplatform)
-            
-            - **Auto-signed (Windows Authenticode)**: Evita o aviso do Windows Defender / SmartScreen.
-            - **Integridade (SHA256)**: Cada binário acompanha um arquivo `.sha256` — verifique com `sha256sum -c` (Linux/Git Bash) ou `shasum -a 256 -c` (macOS).
-            - **Suporte Multiplataforma**: Binários compilados nativamente para Windows (x64), macOS (Intel & Apple Silicon) e Linux (x64).
-            - **Visão Computacional por MCP**: Servidor nativo de visão e automação.
-            - **Transporte HTTP/TCP (Porta 8000)**: Conexão pronta para o **FazAI-NG**.
-            - **Patrocinadores**: Webstorage Tecnologia (www.webstorage.com.br) & Imóvel Site (www.imovelsite.com.br).
+            ${{ env.INSTALLER_NAME }}
+            ${{ env.INSTALLER_NAME }}.sha256
+
+  # --------------------------------------------------------------------------
+  # PUBLICACAO DO RELEASE — UM JOB SO, DEPOIS DA MATRIZ
+  # --------------------------------------------------------------------------
+  # POR QUE ESTE JOB EXISTE (nao volte a publicar dentro da matriz):
+  #   Antes, o step "Publish GitHub Release Artifact" rodava nos 3 jobs da matriz
+  #   e cada um reescrevia o MESMO corpo do release — um corpo com a lista fixa de
+  #   artefatos, incluindo o instalador Windows. Com `fail-fast: false`, se o job
+  #   Windows falhasse, os jobs Linux/macOS ainda publicavam um release anunciando
+  #   um instalador Windows que nunca foi anexado. Alem disso as tres execucoes
+  #   concorriam para criar/atualizar o mesmo release (corrida).
+  #
+  # SOLUCAO ESCOLHIDA: job unico de release apos a matriz, que baixa os artifacts
+  # e GERA O CORPO A PARTIR DOS ARQUIVOS QUE REALMENTE EXISTEM. Se uma plataforma
+  # falhou, ela simplesmente nao aparece na lista — o release deixa de mentir sem
+  # precisar de texto generico e vago.
+  #
+  # `if: always()` + `needs` para publicar o que deu certo mesmo com alguma
+  # plataforma quebrada. Se NENHUM job produziu artifact, o download falha e
+  # nenhum release e criado — que e o comportamento desejado.
+  # --------------------------------------------------------------------------
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-release
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # Reflete a CONFIGURACAO de assinatura do repositorio. Se o segredo existe,
+      # o job Windows assinou (ou falhou tentando, e entao nao ha artefato Windows
+      # nenhum na lista abaixo). Usado so para escolher o texto do SmartScreen.
+      HAS_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Compose release body from files that actually exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-files
+          echo "Arquivos baixados:"
+          ls -l
+
+          # Ordem canonica de exibicao dos artefatos no corpo do release.
+          ARTIFACTS="fzcomputerai-setup-windows-x64.exe fzcomputerai-windows-x64.exe fzcomputerai-macos fzcomputerai-linux-x64"
+
+          # Sem nenhum binario nao ha o que publicar.
+          found=0
+          for f in $ARTIFACTS; do
+            if [ -f "$f" ]; then found=1; fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error title=Nada a publicar::Nenhum artefato de build foi produzido pela matriz."
+            exit 1
+          fi
+
+          BODY="$GITHUB_WORKSPACE/release-body.md"
+          : > "$BODY"
+
+          # A secao de SmartScreen so faz sentido se houver artefato Windows.
+          win_present=0
+          for f in fzcomputerai-setup-windows-x64.exe fzcomputerai-windows-x64.exe; do
+            if [ -f "$f" ]; then win_present=1; fi
+          done
+
+          {
+            echo "## FzComputerAI ${GITHUB_REF_NAME} — Binários Standalone (Multiplataforma)"
+            echo
+            echo "### ⚠️ Assinatura digital e SmartScreen — leia antes de executar"
+            echo
+          } >> "$BODY"
+
+          if [ "$win_present" -eq 0 ]; then
+            {
+              echo "Este release **não contém artefatos Windows**: o build da plataforma falhou"
+              echo "nesta tag e nada foi anexado. As observações sobre SmartScreen não se aplicam"
+              echo "aos arquivos abaixo."
+            } >> "$BODY"
+          elif [ "${HAS_WINDOWS_CERT}" = "true" ]; then
+            {
+              echo "Os binários Windows deste release foram assinados com o certificado"
+              echo "Authenticode configurado no repositório (com timestamp RFC3161)."
+              echo "Certificados novos ainda acumulam reputação no SmartScreen, então um aviso"
+              echo "pode aparecer nos primeiros downloads."
+            } >> "$BODY"
+          else
+            {
+              echo "Os binários deste release **não são assinados digitalmente** (não há certificado"
+              echo "Authenticode de code signing para este projeto no momento)."
+              echo
+              echo "Ao abrir o \`.exe\` **ou o instalador** no Windows, o SmartScreen exibirá"
+              echo "*\"O Windows protegeu o seu computador\"*. Para prosseguir:"
+              echo "**Mais informações → Executar assim mesmo**."
+              echo
+              echo "Um instalador não assinado recebe **exatamente o mesmo aviso** que o \`.exe\` —"
+              echo "instalador não contorna SmartScreen."
+            } >> "$BODY"
+          fi
+
+          {
+            echo
+            echo "### Verifique a integridade antes de executar"
+            echo
+            echo "Cada artefato acompanha um arquivo \`.sha256\` gravado com o **nome base** do"
+            echo "arquivo, então basta baixar os dois na mesma pasta:"
+            echo
+            echo "- Linux / Git Bash: \`sha256sum -c <arquivo>.sha256\`"
+            echo "- macOS: \`shasum -a 256 -c <arquivo>.sha256\`"
+            echo "- PowerShell: \`Get-FileHash .\\<arquivo> -Algorithm SHA256\`"
+            echo
+            echo "### Artefatos publicados neste release"
+            echo
+          } >> "$BODY"
+
+          # Descricao por nome de arquivo — so entra na lista o que existe de fato.
+          describe() {
+            case "$1" in
+              fzcomputerai-setup-windows-x64.exe) echo "instalador Windows (Inno Setup)" ;;
+              fzcomputerai-windows-x64.exe)       echo "binário portátil Windows (x64)" ;;
+              fzcomputerai-macos)                 echo "binário macOS" ;;
+              fzcomputerai-linux-x64)             echo "binário Linux (x64)" ;;
+              *)                                  echo "artefato" ;;
+            esac
+          }
+
+          for f in $ARTIFACTS; do
+            if [ -f "$f" ]; then
+              echo "- \`$f\` — $(describe "$f")" >> "$BODY"
+            fi
+          done
+
+          {
+            echo
+            echo "> Esta lista é gerada a partir dos arquivos realmente anexados. Se uma"
+            echo "> plataforma não aparece acima, o build dela falhou nesta tag e o arquivo"
+            echo "> **não** foi publicado."
+            echo
+            echo "#### SHA256"
+            echo
+            echo '```'
+          } >> "$BODY"
+          cat ./*.sha256 >> "$BODY"
+          {
+            echo '```'
+            echo
+            echo "### Neste release"
+            echo
+            echo "- **Suporte Multiplataforma**: binários compilados nativamente para Windows (x64), macOS e Linux (x64)."
+            echo "- **Visão Computacional por MCP**: servidor nativo de visão e automação."
+            echo "- **Transporte HTTP/TCP (Porta 8000)**: conexão pronta para o **FazAI-NG**."
+            echo "- **Patrocinadores**: Webstorage Tecnologia (www.webstorage.com.br) & Imóvel Site (www.imovelsite.com.br)."
+          } >> "$BODY"
+
+          echo "----- corpo gerado -----"
+          cat "$BODY"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: false
+          files: release-files/*
+          body_path: release-body.md
           draft: false
           prerelease: false
         env:

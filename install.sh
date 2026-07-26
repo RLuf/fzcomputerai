@@ -205,11 +205,141 @@ warn_path_if_needed() {
 # ------------------------------------------------------------------------------
 TMP_SRC_DIR=""
 TMP_BIN_FILE=""
+TMP_SUMS_FILE=""
 cleanup() {
     if [ -n "$TMP_SRC_DIR" ]; then rm -rf "$TMP_SRC_DIR" 2>/dev/null || true; fi
     if [ -n "$TMP_BIN_FILE" ]; then rm -f "$TMP_BIN_FILE" 2>/dev/null || true; fi
+    if [ -n "$TMP_SUMS_FILE" ]; then rm -f "$TMP_SUMS_FILE" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
+
+# ------------------------------------------------------------------------------
+# Integridade — verificação SHA-256 do binário oficial
+#
+# Os binários publicados NÃO são assinados digitalmente; o arquivo .sha256
+# publicado ao lado de cada artefato é hoje a única garantia de integridade.
+# Por isso o download só é instalado depois de conferido contra esse hash.
+# ------------------------------------------------------------------------------
+API_JSON=""
+
+# Nome da ferramenta de hash disponível no sistema (vazio se não houver nenhuma)
+checksum_tool() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        echo "sha256sum"
+    elif command -v shasum >/dev/null 2>&1; then
+        echo "shasum -a 256"
+    fi
+}
+
+# Calcula o SHA-256 do arquivo ($1) e imprime somente o hash, em minúsculas.
+# Retorna 1 se não houver ferramenta de hash disponível.
+compute_sha256() {
+    local file="$1" out=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        out="$(sha256sum "$file" 2>/dev/null || true)"
+    elif command -v shasum >/dev/null 2>&1; then
+        out="$(shasum -a 256 "$file" 2>/dev/null || true)"
+    else
+        return 1
+    fi
+    printf '%s' "$out" | awk '{print tolower($1)}'
+}
+
+# Extrai apenas o hash do arquivo .sha256 ($1), ignorando o nome/caminho que o
+# acompanha — releases antigas trazem o caminho junto do hash, então depender de
+# 'sha256sum -c' e do nome bater falharia. Aceita os formatos:
+#   "<hash>  arquivo" | "<hash>" isolado | "SHA256 (arquivo) = <hash>"
+extract_sha256() {
+    local file="$1" line="" hash=""
+    line="$(tr -d '\r' < "$file" 2>/dev/null | head -n1 || true)"
+    hash="$(printf '%s' "$line" | awk '{print $1}')"
+    if ! printf '%s' "$hash" | grep -qiE '^[0-9a-f]{64}$'; then
+        hash="$(printf '%s' "$line" | grep -oiE '[0-9a-f]{64}' | head -n1 || true)"
+    fi
+    printf '%s' "$hash" | tr 'ABCDEF' 'abcdef'
+}
+
+# Descobre a URL de download de um asset ($1) na resposta da API do GitHub.
+find_asset_url() {
+    local want="$1"
+    [ -n "$API_JSON" ] || return 0
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$API_JSON" | jq -r --arg n "$want" \
+            '.assets[]? | select(.name == $n) | .browser_download_url' 2>/dev/null \
+            | head -n1 || true
+        return 0
+    fi
+    # Fallback sem jq: compara o nome do arquivo ao final de cada URL
+    printf '%s\n' "$API_JSON" | tr ',' '\n' \
+        | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
+        | grep -o 'https://[^"]*' \
+        | while IFS= read -r url; do
+              if [ "${url##*/}" = "$want" ]; then printf '%s\n' "$url"; fi
+          done | head -n1 || true
+}
+
+# Verifica o arquivo baixado ($1) contra o <asset>.sha256 ($2) da mesma release.
+# Retorno: 0 = pode prosseguir (verificado, ou verificação comprovadamente
+#              indisponível — sempre com aviso explícito);
+#          1 = hash divergente; o chamador deve descartar o arquivo e abortar.
+verify_download_checksum() {
+    local file="$1" asset_name="$2"
+    local sums_url="" expected="" actual=""
+
+    sums_url="$(find_asset_url "${asset_name}.sha256")"
+    if [ -z "$sums_url" ]; then
+        warn "Checksum oficial (${asset_name}.sha256) não publicado nesta release."
+        warn "Não foi possível verificar a integridade do download; prosseguindo assim mesmo."
+        return 0
+    fi
+
+    if [ -z "$(checksum_tool)" ]; then
+        warn "Nem 'sha256sum' nem 'shasum' foram encontrados neste sistema."
+        warn "VERIFICAÇÃO DE INTEGRIDADE PULADA — o binário será instalado SEM conferência."
+        warn "Instale o coreutils (sha256sum) e confira manualmente com: $sums_url"
+        return 0
+    fi
+
+    # Template explícito: o mktemp do BSD/macOS não aceita ser chamado sem template
+    TMP_SUMS_FILE="$(mktemp "${TMPDIR:-/tmp}/fzcomputerai-sha256.XXXXXXXX" 2>/dev/null || true)"
+    if [ -z "$TMP_SUMS_FILE" ]; then
+        warn "Falha ao criar arquivo temporário para o checksum. Verificação PULADA."
+        return 0
+    fi
+
+    info "Baixando checksum oficial: $sums_url"
+    if ! curl -fL --silent --show-error -o "$TMP_SUMS_FILE" "$sums_url"; then
+        warn "Falha ao baixar ${asset_name}.sha256. VERIFICAÇÃO DE INTEGRIDADE PULADA."
+        return 0
+    fi
+
+    expected="$(extract_sha256 "$TMP_SUMS_FILE")"
+    if [ -z "$expected" ]; then
+        warn "Arquivo de checksum em formato inesperado (nenhum SHA-256 encontrado)."
+        warn "VERIFICAÇÃO DE INTEGRIDADE PULADA."
+        return 0
+    fi
+
+    actual="$(compute_sha256 "$file" || true)"
+    if [ -z "$actual" ]; then
+        warn "Não foi possível calcular o SHA-256 do arquivo baixado."
+        warn "VERIFICAÇÃO DE INTEGRIDADE PULADA."
+        return 0
+    fi
+
+    if [ "$expected" != "$actual" ]; then
+        err "CHECKSUM NÃO CONFERE — instalação abortada."
+        err "  esperado: $expected"
+        err "  obtido:   $actual"
+        err "  checksum: $sums_url"
+        err "Isso indica download corrompido ou artefato adulterado."
+        err "O arquivo baixado será apagado. Não execute esse binário."
+        return 1
+    fi
+
+    success "Integridade verificada via SHA-256 ($(checksum_tool)): $actual"
+    return 0
+}
 
 # ------------------------------------------------------------------------------
 # Modo remoto — fallback: clonar o repositório e compilar do código-fonte
@@ -296,29 +426,35 @@ remote_install() {
     fi
 
     if [ "$DRY_RUN" -eq 1 ]; then
+        local tool
+        tool="$(checksum_tool)"
         dry "Consultaria a API oficial do GitHub: $API_LATEST"
         dry "Procuraria o asset: $asset"
         dry "Baixaria: curl -fL -o <tmpfile> <browser_download_url>"
+        dry "Baixaria o checksum oficial ${asset}.sha256 da mesma release"
+        if [ -n "$tool" ]; then
+            dry "Verificaria a integridade com '$tool' ANTES de instalar"
+        else
+            warn "Nem 'sha256sum' nem 'shasum' existem aqui: a verificação seria PULADA (com aviso)."
+        fi
+        dry "  hash confere        => chmod +x e instalação"
+        dry "  hash diverge        => apaga o download, erro e abort (possível adulteração)"
+        dry "  .sha256 inexistente => avisa que não deu para verificar e prossegue"
         dry "Instalaria: install -m 0755 <tmpfile> $INSTALL_DIR/fzcomputerai"
         dry "Fallback sem release/asset: git clone --depth 1 ${REPO_URL}.git + cargo build --release"
         return 0
     fi
 
     info "Consultando a API oficial do GitHub Releases: $API_LATEST"
-    local api_json="" download_url="" tag=""
-    api_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$API_LATEST" 2>/dev/null || true)"
+    local download_url="" tag=""
+    API_JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$API_LATEST" 2>/dev/null || true)"
 
-    if [ -n "$api_json" ]; then
+    if [ -n "$API_JSON" ]; then
+        download_url="$(find_asset_url "$asset")"
         if command -v jq >/dev/null 2>&1; then
-            download_url="$(printf '%s' "$api_json" | jq -r --arg n "$asset" \
-                '.assets[]? | select(.name == $n) | .browser_download_url' 2>/dev/null | head -n1 || true)"
-            tag="$(printf '%s' "$api_json" | jq -r '.tag_name // empty' 2>/dev/null || true)"
+            tag="$(printf '%s' "$API_JSON" | jq -r '.tag_name // empty' 2>/dev/null || true)"
         else
-            download_url="$(printf '%s\n' "$api_json" | tr ',' '\n' \
-                | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
-                | grep -o 'https://[^"]*' \
-                | grep "/${asset}\$" | head -n1 || true)"
-            tag="$(printf '%s\n' "$api_json" | tr ',' '\n' \
+            tag="$(printf '%s\n' "$API_JSON" | tr ',' '\n' \
                 | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
                 | head -n1 | sed 's/.*: *"\([^"]*\)"$/\1/' || true)"
         fi
@@ -337,6 +473,15 @@ remote_install() {
         build_from_source
         return 0
     fi
+
+    # Os binários não são assinados: o .sha256 da release é a única garantia de
+    # integridade disponível hoje. Conferir ANTES de instalar.
+    if ! verify_download_checksum "$TMP_BIN_FILE" "$asset"; then
+        rm -f "$TMP_BIN_FILE" 2>/dev/null || true
+        TMP_BIN_FILE=""
+        exit 1
+    fi
+
     chmod +x "$TMP_BIN_FILE"
     install_binary "$TMP_BIN_FILE" "fzcomputerai"
 }

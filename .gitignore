@@ -3,6 +3,9 @@
 **/target/
 **/*.rs.bk
 
+# Saída do Inno Setup (instalador compilado, publicado via GitHub Releases)
+/dist/
+
 # Temporary, Tarball & Local Configs
 *.tmp
 *.log

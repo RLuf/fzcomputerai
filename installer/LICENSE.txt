@@ -1,0 +1,92 @@
+FzComputerAI — Interface Grafica Nativa para CUA Driver / MCP
+Copyright (c) Roger Luft — Webstorage Tecnologia (https://www.webstorage.com.br)
+
+================================================================================
+PORTUGUES (pt-BR)
+================================================================================
+
+Este software e distribuido sob a licenca
+Creative Commons Attribution 4.0 International (CC BY 4.0).
+
+Voce tem liberdade para:
+
+  * Compartilhar — copiar e redistribuir o material em qualquer suporte
+    ou formato, para qualquer fim, inclusive comercial.
+  * Adaptar — remixar, transformar e criar a partir do material,
+    para qualquer fim, inclusive comercial.
+
+De acordo com os termos seguintes:
+
+  * Atribuicao — Voce deve dar o credito apropriado a Roger Luft /
+    Webstorage Tecnologia, prover um link para a licenca e indicar se
+    mudancas foram feitas. Voce pode faze-lo de qualquer forma razoavel,
+    mas nao de forma que sugira que o licenciante o apoia ou aprova o
+    seu uso.
+  * Sem restricoes adicionais — Voce nao pode aplicar termos juridicos
+    ou medidas de carater tecnologico que restrinjam legalmente outros
+    de fazerem algo que a licenca permita.
+
+AVISO: Este e um resumo legivel por humanos da licenca (e nao um
+substituto dela). O texto legal completo e vinculante esta disponivel em:
+
+    https://creativecommons.org/licenses/by/4.0/legalcode.pt
+
+Resumo oficial: https://creativecommons.org/licenses/by/4.0/deed.pt-BR
+
+ISENCAO DE GARANTIA: O software e fornecido "COMO ESTA", sem garantias de
+qualquer especie, expressas ou implicitas, incluindo, mas nao se limitando
+as garantias de comercializacao, adequacao a uma finalidade especifica e
+nao violacao.
+
+--------------------------------------------------------------------------------
+COMPONENTES DE TERCEIROS
+--------------------------------------------------------------------------------
+
+O motor de automacao "cua-driver" (projeto trycua/cua) NAO faz parte deste
+pacote e possui licenca, ciclo de vida e instalador proprios. Sua instalacao
+e opcional e feita pelo instalador oficial do proprio projeto:
+
+    https://github.com/trycua/cua
+
+Ao marcar a opcao "Instalar o motor cua-driver" durante a instalacao, o
+instalador oficial do cua sera executado e fara download do binario a partir
+das releases oficiais no GitHub. A desinstalacao do FzComputerAI NAO remove
+o cua-driver — use o desinstalador proprio dele.
+
+================================================================================
+ENGLISH (en)
+================================================================================
+
+This software is distributed under the
+Creative Commons Attribution 4.0 International License (CC BY 4.0).
+
+You are free to Share (copy and redistribute the material in any medium or
+format) and Adapt (remix, transform, and build upon the material) for any
+purpose, even commercially, under the following terms:
+
+  * Attribution — You must give appropriate credit to Roger Luft /
+    Webstorage Tecnologia, provide a link to the license, and indicate if
+    changes were made.
+  * No additional restrictions — You may not apply legal terms or
+    technological measures that legally restrict others from doing anything
+    the license permits.
+
+This is a human-readable summary of (and not a substitute for) the license.
+The full legal code is available at:
+
+    https://creativecommons.org/licenses/by/4.0/legalcode
+
+DISCLAIMER: The software is provided "AS IS", without warranty of any kind,
+express or implied.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+--------------------------------------------------------------------------------
+
+The "cua-driver" automation engine (trycua/cua project) is NOT part of this
+package and has its own license, lifecycle and installer. Installing it is
+optional and is performed by the project's own official installer:
+
+    https://github.com/trycua/cua
+
+Uninstalling FzComputerAI does NOT remove cua-driver — use its own uninstaller.

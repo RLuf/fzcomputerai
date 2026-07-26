@@ -136,17 +136,38 @@ cua-driver autostart kick
 
 ## 📦 Quick Start
 
-### 1. Via NPM (Global)
-```bash
-npm install -g fzcomputerai
-```
+### 🪟 Windows — Installer (recommended)
 
-### 2. Remote Installation via PowerShell (Windows One-liner)
+Download **`fzcomputerai-setup-windows-x64.exe`** from the [releases page](https://github.com/RLuf/fzcomputerai/releases/latest) and run it.
+
+The installer (Inno Setup, bilingual PT-BR / English) does the following:
+
+- **Installs the GUI** into `%LOCALAPPDATA%\Programs\FzComputerAI` — the default case **does not trigger UAC**; you may choose to install for all users in the wizard (that path does elevate).
+- **Creates a Start Menu shortcut** and, optionally, a Desktop shortcut.
+- **"Start FzComputerAI with Windows" option** (autostart) — writes exactly the same `HKCU\...\Run` key used by the checkbox on the *MCP & Network* tab, so the GUI and the installer never contradict each other.
+- **"Install the `cua-driver` engine" option** (unchecked by default, requires internet) — runs the **official** cua project installer.
+- **Registers an uninstaller** under *Settings → Apps → Installed apps*. It removes the GUI; `cua-driver` has its own lifecycle and is **not** removed along with it (the uninstaller says so on screen).
+
+> ⚠️ **SmartScreen warning — read before running**
+>
+> This project's binaries are **not code-signed yet**. When you open the installer, Windows will show *"Windows protected your PC"*: click **More info → Run anyway**.
+>
+> **The installer does not bypass that warning** — an unsigned installer gets exactly the same block as a standalone `.exe`. Before running it, verify the `.sha256` file published next to the binary in the release:
+> ```powershell
+> Get-FileHash .\fzcomputerai-setup-windows-x64.exe -Algorithm SHA256
+> ```
+> Full context, certificate options and costs (in Portuguese): **[SIGNING.md](SIGNING.md)**.
+
+### 🪟 Windows — Alternatives
+
+**a) Portable binary** — download `fzcomputerai-windows-x64.exe` from the release and run it directly: no installation, no shortcuts, no autostart and no uninstaller; updates are manual. The same SmartScreen warning applies.
+
+**b) Remote installation via PowerShell (one-liner)**
 ```powershell
 iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
 ```
 
-### 3. Remote Installation via Bash (Linux & macOS One-liner)
+### 🐧 Linux & 🍎 macOS — Remote Installation via Bash (One-liner)
 ```bash
 curl -fsSL https://github.com/RLuf/fzcomputerai/raw/master/install.sh | bash
 ```
@@ -158,7 +179,12 @@ curl -fsSL https://github.com/RLuf/fzcomputerai/raw/master/install.sh | bash -s 
 
 > **Note:** the remote installer using the official release binary installs the **`fzcomputerai` GUI**. The stdio MCP server is still `cua-driver` — the script prints the corresponding `.mcp.json` snippet and points you to `npx fzcomputerai mcp` (the source-build fallback also compiles `cua-driver`).
 
-### 4. Compilation from Source Code / Tarball (.tgz)
+### 📦 Via NPM (Global)
+```bash
+npm install -g fzcomputerai
+```
+
+### 🧱 Compilation from Source Code / Tarball (.tgz)
 ```bash
 # Download or extract source code tarball (.tgz):
 tar -xzf fzcomputerai-<version>.tgz
@@ -168,7 +194,7 @@ cd package (or fzcomputerai)
 cargo build --release --manifest-path fzcomputerai/Cargo.toml
 ```
 
-For detailed source code compilation instructions and advanced configuration, refer to [INSTALL_EN.md](file:///g:/fzcomcontrol/INSTALL_EN.md).
+For detailed source code compilation instructions and advanced configuration, refer to [INSTALL_EN.md](INSTALL_EN.md).
 
 ---
 

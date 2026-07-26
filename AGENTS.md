@@ -41,6 +41,61 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - **Sempre preservar** a declaração de Copyright original e os créditos no `README.md` e `LICENSE.md`.
 - As contribuições deste repositório e a GUI `fzcomputerai` estão sob licença **CC BY 4.0** (Roger Luft / Webstorage Tecnologia).
 
+### 4. Assinatura de Código, SmartScreen e Segurança do Usuário Final (NORMATIVO)
+
+> **Fonte da verdade:** [`SIGNING.md`](SIGNING.md). Leia-o **antes** de tocar em qualquer coisa relacionada a
+> assinatura, certificados, instalador ou avisos do Windows. Esta seção é o resumo vinculante; o documento traz o
+> porquê, os custos e as opções reais.
+
+**Contexto:** uma versão anterior do `install.ps1` gerava um certificado auto-assinado e o instalava na Raiz
+Confiável do usuário final. Isso foi **removido por questão de segurança**. Esta seção existe para que a remoção
+não seja desfeita por um agente futuro agindo de boa-fé.
+
+#### 4.1. Proibições absolutas
+
+Nenhuma das práticas abaixo pode ser implementada — **não em código, não no instalador, não em script auxiliar,
+não em workflow de CI, não "temporariamente para testar"**:
+
+1. **Gerar certificado auto-assinado para distribuição.** Proibido usar `New-SelfSignedCertificate`,
+   `makecert`, `openssl req -x509` ou equivalente para assinar artefatos destinados ao usuário final. Não remove
+   aviso nenhum e produz um binário falsamente "assinado".
+2. **Instalar CA / certificado em store de confiança da máquina do usuário.** Proibido escrever em
+   `Cert:\CurrentUser\Root`, `Cert:\LocalMachine\Root`, `TrustedPublisher`, no keychain System/login do macOS ou
+   em `/usr/local/share/ca-certificates` (e afins). Isso altera a postura de segurança de um computador que não
+   pertence a este projeto e é a técnica clássica de malware para legitimar binários arbitrários.
+3. **Alterar de forma persistente a configuração de SmartScreen, Defender ou antivírus.** Proibido mexer em
+   políticas/registro de SmartScreen, adicionar exclusões no Defender (`Add-MpPreference -ExclusionPath`),
+   desativar proteção em tempo real ou remover a *Mark of the Web* de arquivos baixados em nome do usuário.
+4. **Embutir chave privada de assinatura** em repositório, instalador, pacote npm ou artefato de release.
+5. **Afirmar, em qualquer texto do projeto** (README, CHANGELOG, release notes, UI, comentários, mensagens de
+   commit, resposta ao usuário), que assinatura, instalador, autoassinatura ou qualquer outro truque **"elimina",
+   "remove" ou "evita" o aviso do SmartScreen/Defender**. Um instalador não assinado sofre **exatamente o mesmo
+   bloqueio** que um `.exe` avulso. Mesmo com certificado OV legítimo, o aviso **pode persistir** até o
+   certificado acumular reputação — ver `SIGNING.md` §5.
+
+#### 4.2. O que é permitido
+
+- Assinar artefatos **antes da publicação** com certificado de code signing de **CA pública**, em token USB ou
+  HSM, via `scripts/sign-release.ps1` (obrigatório carimbo de tempo RFC 3161).
+- Manter a assinatura **condicional** no CI, que só roda se os segredos existirem, e o `::warning` explícito
+  quando não há certificado.
+- Publicar e documentar os checksums `.sha256`.
+- Documentar honestamente o aviso do SmartScreen e como o usuário prossegue.
+
+#### 4.3. Obrigações ao alterar algo nessa área
+
+- Se encontrar código que viole 4.1, **remova-o e registre a remoção no `CHANGELOG.md`** — não o deixe
+  desabilitado "por precaução".
+- Ao remover uma prática proibida, **deixe um comentário no arquivo** explicando o porquê, para impedir a
+  reintrodução (é o que já existe em `install.ps1`, `installer/fzcomputerai.iss`,
+  `.github/workflows/build-release.yml` e `scripts/sign-release.ps1`).
+- **Não reescreva o histórico do `CHANGELOG.md`.** Uma promessa incorreta já publicada é corrigida com uma nota
+  de correção na entrada original **mais** uma entrada nova, nunca apagando o registro.
+- Datas e fatos regulatórios (token/HSM obrigatório desde **junho/2023**; validade máxima de 459 dias;
+  elegibilidade do Azure Trusted Signing) vivem no `SIGNING.md`. Se precisar citá-los, **cite-os de lá**; se
+  precisar atualizá-los, atualize `SIGNING.md` primeiro e cite a fonte. **Não afirme número, preço ou lista de
+  países sem fonte verificável.**
+
 ---
 
 ## 🛠️ Comandos Úteis para Agentes
