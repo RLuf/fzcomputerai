@@ -63,13 +63,20 @@ if (subCommand === 'gui') {
     child.on('exit', (code) => process.exit(code || 0));
   } else {
     console.warn('\x1b[33m[AVISO] Binário cua-driver não encontrado no PATH ou compilação local.\x1b[0m');
-    console.log('Executando script de instalação nativo...');
-    
+
     if (process.platform === 'win32') {
-      const psScript = path.resolve(__dirname, '..', 'install.ps1');
-      const child = spawn('powershell', ['-ExecutionPolicy', 'Bypass', '-File', psScript], { stdio: 'inherit' });
-      child.on('exit', (code) => process.exit(code || 0));
+      // No Windows a instalação é exclusivamente via o instalador gráfico (Inno Setup),
+      // que já oferece a task de instalar o motor cua-driver. O antigo install.ps1
+      // da raiz do repositório foi removido — não há mais script console para chamar.
+      console.error('\x1b[31m[ERRO] O motor cua-driver não foi encontrado neste sistema.\x1b[0m');
+      console.log('Para instalar no Windows, baixe e execute o instalador gráfico:');
+      console.log('\x1b[36m  fzcomputerai-setup-windows-x64.exe\x1b[0m');
+      console.log('\x1b[36m  https://github.com/RLuf/fzcomputerai/releases/latest\x1b[0m');
+      console.log('Ele instala o motor cua-driver junto (requer internet).');
+      console.log('Alternativa: use o botão "Instalar motor cua-driver" na própria GUI do FzComputerAI.');
+      process.exit(1);
     } else {
+      console.log('Executando script de instalação nativo...');
       const shScript = path.resolve(__dirname, '..', 'install.sh');
       const child = spawn('bash', [shScript], { stdio: 'inherit' });
       child.on('exit', (code) => process.exit(code || 0));

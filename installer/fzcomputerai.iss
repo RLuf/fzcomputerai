@@ -19,7 +19,7 @@
 ;  deriva VersionInfoVersion usa #sub/#for/#expr do pre-processador).
 ;
 ;  Parametros opcionais (todos tem default):
-;    /DAppVersion=1.0.3          versao exibida/gravada (default: 1.0.2)
+;    /DAppVersion=1.0.3          versao exibida/gravada (default: 2.0.0)
 ;    /DSourceExe=caminho.exe     binario a empacotar
 ;                                (default: ..\fzcomputerai\target\release\fzcomputerai.exe)
 ;    /DExeName=fzcomputerai.exe  nome final do executavel dentro de {app}
@@ -52,7 +52,7 @@
 #ifndef AppVersion
   ; Fallback: mantido em sincronia manual com fzcomputerai/Cargo.toml.
   ; No CI a versao vem do tag via /DAppVersion=x.y.z.
-  #define AppVersion "1.0.2"
+  #define AppVersion "2.0.0"
 #endif
 
 #ifndef SourceExe
@@ -209,6 +209,11 @@ CloseApplications=yes
 RestartApplications=no
 
 OutputDir=..\dist
+; CONTRATO COM O CI: este nome TEM de casar com INSTALLER_NAME em
+; .github/workflows/build-release.yml (o step "Build Windows Installer"
+; falha se dist\fzcomputerai-setup-windows-x64.exe nao existir apos o ISCC).
+; A versao do release vem do tag do GitHub, nao do nome do arquivo.
+; Quem quiser versao no nome precisa mudar os dois lados juntos.
 OutputBaseFilename=fzcomputerai-setup-windows-x64
 Compression=lzma2/max
 SolidCompression=yes
@@ -236,6 +241,7 @@ brazilianportuguese.GroupComponents=Motor de automacao:
 brazilianportuguese.TaskAutostart=Iniciar o FzComputerAI com o Windows
 brazilianportuguese.TaskCuaDriver=Instalar o motor cua-driver (NECESSARIO para controlar a maquina; requer internet)
 brazilianportuguese.RunCuaDriverDesc=Instalar agora o motor cua-driver {#CuaDriverVersion} (abre uma janela do PowerShell)
+brazilianportuguese.RunVerifyDesc=Verificar a instalacao (relatorio: MCP funcional, porta/interfaces, autostart, motor)
 brazilianportuguese.WarnNoEngine=Voce desmarcou a instalacao do motor cua-driver.%n%nO cua-driver NAO e um extra: e o motor que executa clique, digitacao, captura de tela e todas as demais acoes. Sem ele o FzComputerAI abre normalmente, mas NENHUM botao funciona - toda acao termina em "nao foi possivel executar 'cua-driver'".%n%nA instalacao vai continuar. Se preferir, instale o motor depois pelo proprio aplicativo (botao "Instalar motor cua-driver") ou execute novamente este instalador com a opcao marcada.
 brazilianportuguese.UninstallDriverNotice=O FzComputerAI foi removido.%n%nO motor cua-driver NAO foi desinstalado: ele possui gerenciador e desinstalador proprios.%n%nPara remove-lo, consulte https://github.com/trycua/cua
 
@@ -244,6 +250,7 @@ english.GroupComponents=Automation engine:
 english.TaskAutostart=Start FzComputerAI with Windows
 english.TaskCuaDriver=Install the cua-driver engine (REQUIRED to control the machine; needs internet)
 english.RunCuaDriverDesc=Install the cua-driver {#CuaDriverVersion} engine now (opens a PowerShell window)
+english.RunVerifyDesc=Verify the installation (report: MCP working, port/interfaces, autostart, engine)
 english.WarnNoEngine=You unchecked the cua-driver engine.%n%ncua-driver is not an extra: it is the engine that performs clicking, typing, screen capture and every other action. Without it FzComputerAI still opens, but NO button works - every action ends in "cannot execute 'cua-driver'".%n%nSetup will continue. You can install the engine later from the application itself (the "Install cua-driver engine" button) or by running this installer again with the option checked.
 english.UninstallDriverNotice=FzComputerAI has been removed.%n%nThe cua-driver engine was NOT uninstalled: it ships its own manager and uninstaller.%n%nTo remove it, see https://github.com/trycua/cua
 
@@ -294,6 +301,10 @@ Source: "LICENSE.txt";  DestDir: "{app}"; Flags: ignoreversion
 Source: "{#CuaScriptsDir}\install.ps1";          DestDir: "{app}\cua-driver"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#CuaScriptsDir}\_install-common.psm1"; DestDir: "{app}\cua-driver"; Flags: ignoreversion skipifsourcedoesntexist
 
+; Relatorio de verificacao pos-instalacao (testes reais: MCP, porta, autostart,
+; motor). Instalado junto com o app para poder ser reexecutado a qualquer hora.
+Source: "verify-install.ps1"; DestDir: "{app}"; Flags: ignoreversion
+
 
 [Icons]
 Name: "{group}\{#AppName}";      Filename: "{app}\{#ExeName}"; WorkingDir: "{app}"
@@ -316,6 +327,16 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ; desligar o autostart e prerrogativa da GUI.
 ; A limpeza na desinstalacao e feita em CurUninstallStepChanged (secao
 ; [Code]), que cobre inclusive o valor criado pela GUI - ver comentario la.
+
+; Configuracao MCP do daemon em HKCU\Environment. createvalueifdoesntexist:
+; o instalador NUNCA sobrescreve porta/bind personalizados de quem ja usava o
+; sistema - so cria os defaults na primeira instalacao. O bind 0.0.0.0 publica
+; o MCP em todas as interfaces; se o daemon nao subir na LAN, a GUI mostra
+; honestamente "LOCAL apenas" (fallback 127.0.0.1) - nada e presumido.
+; Sem uninsdeletevalue de proposito: o motor cua-driver tem ciclo de vida
+; proprio e pode continuar instalado depois da desinstalacao da GUI.
+Root: HKCU; Subkey: "Environment"; ValueType: string; ValueName: "CUA_DRIVER_RS_MCP_HTTP_PORT"; ValueData: "8000";    Flags: createvalueifdoesntexist
+Root: HKCU; Subkey: "Environment"; ValueType: string; ValueName: "CUA_DRIVER_RS_MCP_HTTP_BIND"; ValueData: "0.0.0.0"; Flags: createvalueifdoesntexist
 
 
 [Run]
@@ -360,13 +381,19 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\cua-driver\install.ps1"" -Release {#CuaDriverVersion}"; WorkingDir: "{app}\cua-driver"; Description: "{cm:RunCuaDriverDesc}"; Tasks: cuadriver; Check: CuaScriptEmbedded; Flags: postinstall skipifsilent waituntilterminated skipifdoesntexist
 
 ; Caminho 2 - fallback quando o submodulo `cua` nao foi empacotado: endpoint
-; oficial do projeto (o mesmo ja usado pelo install.ps1 da raiz do repositorio).
+; oficial do projeto cua (https://cua.ai/driver/install.ps1).
 ; A versao e pinada por CUA_DRIVER_RS_VERSION, que tem precedencia sobre
 ; qualquer default do proprio script.
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$env:CUA_DRIVER_RS_VERSION='{#CuaDriverVersion}'; irm https://cua.ai/driver/install.ps1 | iex"""; Description: "{cm:RunCuaDriverDesc}"; Tasks: cuadriver; Check: CuaScriptNotEmbedded; Flags: postinstall skipifsilent waituntilterminated skipifdoesntexist
 
 ; --- Abrir a GUI ao final --------------------------------------------------
 Filename: "{app}\{#ExeName}"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+; --- Verificacao pos-instalacao (testes reais, relatorio no PowerShell) ----
+; Roda por ultimo, DEPOIS da instalacao do motor (waituntilterminated acima)
+; e da abertura da GUI: o relatorio enxerga o estado final de verdade.
+; nowait: o wizard fecha e a janela do relatorio fica aberta para leitura.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\verify-install.ps1"""; WorkingDir: "{app}"; Description: "{cm:RunVerifyDesc}"; Flags: nowait postinstall skipifsilent skipifdoesntexist
 
 
 [Code]
@@ -405,6 +432,86 @@ var
 //  - PATH aqui e o herdado pelo processo do instalador. Um motor instalado
 //    depois que este setup abriu pode nao ser visto - de novo, o pior caso e
 //    um aviso a mais.
+// Remove a VERSAO ANTERIOR antes de instalar a nova: executa o desinstalador
+// ja registrado para o MESMO AppId, em modo silencioso. Sem versao anterior,
+// nao faz nada. Detalhes que importam:
+//  - HKCU primeiro (instalacao per-user, o caso normal), HKLM como fallback
+//    (instalacao feita com /ALLUSERS).
+//  - /VERYSILENT tambem suprime o MsgBox de usPostUninstall do desinstalador
+//    antigo (UninstallSilent = True la dentro).
+//  - PRESERVACAO DO AUTOSTART: o desinstalador antigo apaga o valor
+//    Run\FzComputerAI (por design, ver RemoveOwnAutostartValue). Num UPGRADE
+//    isso destruiria a preferencia que o usuario ligou pela GUI. Por isso o
+//    valor e salvo antes e restaurado depois - o caminho continua valido
+//    porque o DefaultDirName e o mesmo entre as versoes.
+procedure RunPreviousUninstallerSilently;
+var
+  UninstPath, SavedAutostart: String;
+  HadAutostart: Boolean;
+  ResultCode: Integer;
+begin
+  UninstPath := '';
+  if not RegQueryStringValue(HKEY_CURRENT_USER,
+      'Software\Microsoft\Windows\CurrentVersion\Uninstall\{F3EC4826-531E-4B4D-ADB3-7467D65AAEA8}_is1',
+      'UninstallString', UninstPath) then
+  begin
+    if not RegQueryStringValue(HKEY_LOCAL_MACHINE,
+        'Software\Microsoft\Windows\CurrentVersion\Uninstall\{F3EC4826-531E-4B4D-ADB3-7467D65AAEA8}_is1',
+        'UninstallString', UninstPath) then
+      Exit;
+  end;
+
+  UninstPath := RemoveQuotes(Trim(UninstPath));
+  if (UninstPath = '') or (not FileExists(UninstPath)) then
+    Exit;
+
+  SavedAutostart := '';
+  HadAutostart := RegQueryStringValue(HKEY_CURRENT_USER,
+    'Software\Microsoft\Windows\CurrentVersion\Run', 'FzComputerAI', SavedAutostart);
+
+  Exec(UninstPath, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  if HadAutostart and (SavedAutostart <> '') then
+    RegWriteStringValue(HKEY_CURRENT_USER,
+      'Software\Microsoft\Windows\CurrentVersion\Run', 'FzComputerAI', SavedAutostart);
+end;
+
+// Limpeza pre-instalacao — executada em CurStepChanged(ssInstall), ou seja,
+// SOMENTE DEPOIS que o usuario clicou "Instalar" na pagina Pronto para
+// Instalar. NUNCA mova isto para InitializeSetup: la roda ANTES do wizard
+// aparecer, e quem abrisse o setup so para ler a licenca e cancelar perderia
+// a scheduled task e o autostart do cua-driver sem instalar nada (estado de
+// OUTRO produto destruido sem consentimento). Passos:
+//  1. para o daemon do motor de forma LIMPA (cua-driver stop + autostart
+//     disable) para a reinstalacao do cua comecar do zero;
+//  2. encerra a forca qualquer instancia remanescente (taskkill);
+//  3. remove a scheduled task do daemon e entradas legadas do registro;
+//  4. desinstala silenciosamente a versao anterior (mesmo AppId).
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+begin
+  if CurStep <> ssInstall then
+    Exit;
+
+  Exec(ExpandConstant('{cmd}'), '/C cua-driver stop >nul 2>&1', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{cmd}'), '/C cua-driver autostart disable >nul 2>&1', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM cua-driver.exe /IM fzcomputerai.exe >nul 2>&1', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{cmd}'), '/C schtasks /End /TN "cua-driver-serve" /F >nul 2>&1', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{cmd}'), '/C schtasks /Delete /TN "cua-driver-serve" /F >nul 2>&1', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{cmd}'), '/C reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v cua-driver-serve /f >nul 2>&1', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{cmd}'), '/C reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v CuaDriver /f >nul 2>&1', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  RunPreviousUninstallerSilently;
+end;
+
 function CuaDriverAlreadyInstalled: Boolean;
 var
   ResultCode: Integer;

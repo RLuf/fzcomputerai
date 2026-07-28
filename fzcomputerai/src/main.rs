@@ -10,8 +10,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("FzComputerAI — Computer Vision MCP Manager")
-            .with_inner_size([850.0, 600.0])
-            .with_min_inner_size([700.0, 450.0]),
+            .with_inner_size([900.0, 640.0])
+            .with_min_inner_size([780.0, 560.0]),
         ..Default::default()
     };
 

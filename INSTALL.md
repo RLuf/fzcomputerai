@@ -43,10 +43,13 @@ Este guia contém as instruções passo a passo para instalar, compilar e config
 npm install -g fzcomputerai
 ```
 
-### B. Instalação Remota via PowerShell (Windows One-liner)
-```powershell
-iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
-```
+### B. Windows — Instalador Gráfico (único caminho de instalação no Windows)
+
+> O antigo `install.ps1` da raiz do repositório foi **removido** — a instalação no Windows agora é exclusivamente pelo instalador gráfico (Inno Setup).
+
+1. Baixe o **`fzcomputerai-setup-windows-x64.exe`** em [https://github.com/RLuf/fzcomputerai/releases/latest](https://github.com/RLuf/fzcomputerai/releases/latest).
+2. Execute o arquivo. Como os binários ainda não são assinados, o SmartScreen exibirá *"O Windows protegeu o seu PC"* — clique em **Mais informações → Executar assim mesmo**.
+3. Durante a instalação, marque a task **"Instalar o motor `cua-driver`"** (necessário para o servidor MCP; requer internet) — ela executa o instalador oficial do projeto cua.
 
 ### C. Instalação Remota via Bash (Linux & macOS One-liner)
 ```bash
@@ -55,9 +58,14 @@ curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh
 
 ### D. Instalação Local a partir do Código-Fonte
 
-#### No Windows (PowerShell)
+#### No Windows (PowerShell) — gerar o instalador gráfico localmente
+Quem compila do fonte gera o **mesmo instalador gráfico** do release (requer [Inno Setup](https://jrsoftware.org/isinfo.php) com `ISCC.exe` acessível):
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+# 1. Compilar a GUI
+cargo build --release --manifest-path fzcomputerai/Cargo.toml
+
+# 2. Gerar o instalador (saída em dist\fzcomputerai-setup-windows-x64.exe)
+ISCC.exe /DAppVersion=<versao> installer\fzcomputerai.iss
 ```
 
 #### No Linux / macOS (Bash)
@@ -66,7 +74,7 @@ chmod +x ./install.sh
 ./install.sh
 ```
 
-O script de instalação realizará automaticamente:
+O script `install.sh` realizará automaticamente:
 1. Verificação do compilador Rust/Cargo e compilação do motor `cua-driver` e da GUI `fzcomputerai`.
 2. Configuração das variáveis de ambiente e adição dos binários ao `PATH`.
 3. Ativação automática da variável `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` para suporte nativo a HTTP TCP/IP.

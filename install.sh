@@ -72,16 +72,17 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# Windows não é alvo deste script (.sh) — orientar para o install.ps1
+# Windows não é alvo deste script (.sh) — orientar para o instalador gráfico
+# (Inno Setup), que é hoje o único caminho de instalação no Windows.
 # ------------------------------------------------------------------------------
 OS_NAME="$(uname -s)"
 case "$OS_NAME" in
     MINGW*|MSYS*|CYGWIN*|Windows_NT)
         warn "Windows detectado. Este script (.sh) atende apenas Linux e macOS."
-        info "No Windows, utilize o instalador PowerShell:"
-        echo "    powershell -ExecutionPolicy Bypass -File install.ps1"
-        info "Ou, direto da internet (PowerShell):"
-        echo "    irm ${REPO_URL}/raw/master/install.ps1 | iex"
+        info "No Windows, baixe e execute o instalador gráfico:"
+        echo "    fzcomputerai-setup-windows-x64.exe"
+        echo "    ${REPO_URL}/releases/latest"
+        info "O instalador oferece a opção de instalar o motor cua-driver (requer internet)."
         exit 0
         ;;
 esac

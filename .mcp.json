@@ -1,13 +1,15 @@
-{
-  "mcpServers": {
-    "fz-computer-vision": {
-      "command": "cua-driver",
-      "args": [
-        "mcp"
-      ],
-      "env": {
-        "RUST_LOG": "info"
-      }
-    }
-  }
+﻿{
+    "mcpServers":  {
+                       "fz-computer-vision":  {
+                                                  "args":  [
+                                                               "mcp"
+                                                           ],
+                                                  "env":  {
+                                                              "CUA_DRIVER_RS_MCP_HTTP_PORT":  "8000",
+                                                              "RUST_LOG":  "info",
+                                                              "CUA_DRIVER_RS_MCP_HTTP_BIND":  "0.0.0.0"
+                                                          },
+                                                  "command":  "cua-driver"
+                                              }
+                   }
 }

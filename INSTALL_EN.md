@@ -43,10 +43,13 @@ This guide contains step-by-step instructions to install, compile, and configure
 npm install -g fzcomputerai
 ```
 
-### B. Remote Installation via PowerShell (Windows One-liner)
-```powershell
-iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
-```
+### B. Windows — Graphical Installer (the only Windows installation path)
+
+> The old root `install.ps1` has been **removed** — Windows installation is now done exclusively through the graphical installer (Inno Setup).
+
+1. Download **`fzcomputerai-setup-windows-x64.exe`** from [https://github.com/RLuf/fzcomputerai/releases/latest](https://github.com/RLuf/fzcomputerai/releases/latest).
+2. Run the file. Since the binaries are not code-signed yet, SmartScreen will show *"Windows protected your PC"* — click **More info → Run anyway**.
+3. During installation, check the **"Install the `cua-driver` engine"** task (required for the MCP server; needs internet) — it runs the official cua project installer.
 
 ### C. Remote Installation via Bash (Linux & macOS One-liner)
 ```bash
@@ -55,9 +58,14 @@ curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh
 
 ### D. Local Installation from Source Code
 
-#### On Windows (PowerShell)
+#### On Windows (PowerShell) — build the graphical installer locally
+Source builders generate the **same graphical installer** shipped in releases (requires [Inno Setup](https://jrsoftware.org/isinfo.php) with `ISCC.exe` accessible):
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+# 1. Build the GUI
+cargo build --release --manifest-path fzcomputerai/Cargo.toml
+
+# 2. Build the installer (output: dist\fzcomputerai-setup-windows-x64.exe)
+ISCC.exe /DAppVersion=<version> installer\fzcomputerai.iss
 ```
 
 #### On Linux / macOS (Bash)
@@ -66,7 +74,7 @@ chmod +x ./install.sh
 ./install.sh
 ```
 
-The installation script automatically handles:
+The `install.sh` script automatically handles:
 1. Checking for Rust/Cargo compiler and building `cua-driver` engine and `fzcomputerai` GUI.
 2. Configuring environment variables and adding binary directory to `PATH`.
 3. Enabling `CUA_DRIVER_RS_MCP_HTTP_PORT=8000` for native HTTP TCP/IP remote transport.

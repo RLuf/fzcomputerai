@@ -178,9 +178,10 @@ Não é confiado por ninguém: não encadeia em nenhuma CA pública. O Windows c
 igual**, e ainda cria a falsa impressão de que o binário "está assinado". Este projeto já teve **duas**
 implementações assim, ambas **removidas** justamente por serem enganosas: um passo "Auto-Sign" no
 `.github/workflows/build-release.yml` e a função `Set-FzCodeSigning` do `install.ps1` (esta última também
-incorria em **(c)**, abaixo). Os dois arquivos trazem hoje um comentário registrando a remoção para que não seja
-reintroduzida; o histórico e o **procedimento de remediação para quem executou a versão antiga do `install.ps1`**
-estão na [seção 10](#10-perguntas-frequentes).
+incorria em **(c)**, abaixo). O workflow traz hoje um comentário registrando a remoção para que não seja
+reintroduzida; o `install.ps1` foi depois removido do repositório por inteiro (a instalação no Windows passou a
+ser exclusivamente pelo instalador gráfico Inno Setup). O histórico e o **procedimento de remediação para quem
+executou a versão antiga do `install.ps1`** estão na [seção 10](#10-perguntas-frequentes).
 
 **(c) Instalar uma CA raiz própria no repositório de confiança da máquina do usuário.**
 Isto é **comportamento de malware**. É a técnica clássica para interceptar TLS e legitimar binários arbitrários,
@@ -399,10 +400,13 @@ mesma CA e mesma identidade** para não zerar a reputação acumulada.
 Não. A chave não sai do token — é esse o ponto do token. Assinar no CI exige HSM em nuvem (opção 3) ou um serviço
 como o Azure Artifact Signing (opção 4, indisponível para o Brasil hoje).
 
-**"O `install.ps1` / `install.sh` contornam o aviso?"**
-Não, e não deveriam. **Hoje** eles apenas verificam dependências, compilam/instalam os binários e escrevem a
-configuração MCP local — não tocam em certificado nenhum, não assinam nada e não alteram o repositório de
-confiança da máquina. O binário continua sendo o mesmo binário não assinado.
+**"O instalador gráfico / `install.sh` contornam o aviso?"**
+Não, e não deveriam. O `install.sh` (Linux/macOS) apenas verifica dependências, compila/instala os binários e
+escreve a configuração MCP local; o instalador gráfico do Windows (`installer/fzcomputerai.iss`) copia arquivos,
+cria atalhos e oferece a instalação do motor — nenhum dos dois toca em certificado, assina qualquer coisa ou
+altera o repositório de confiança da máquina. O binário continua sendo o mesmo binário não assinado.
+(O antigo `install.ps1` da raiz, citado nas perguntas seguintes, foi removido do repositório: a instalação no
+Windows é exclusivamente pelo instalador gráfico.)
 
 **"Mas eu li que o `install.ps1` assinava o binário. O que mudou?"**
 Mudou, e é importante que quem rodou a versão antiga saiba disso. **Até a versão 1.0.2, inclusive**, o `install.ps1`
@@ -416,8 +420,9 @@ Isso era a prática **(b) + (c)** proibidas na [seção 6](#6-por-que-não-exist
 não removia o aviso do SmartScreen (o certificado não encadeia em nenhuma CA pública, então o Windows bloqueia
 igual), dava a falsa impressão de binário "assinado" e — o mais grave — **acrescentava uma âncora de confiança na
 máquina do usuário final**. Uma raiz confiável a mais significa que qualquer coisa assinada com aquela chave passa
-a ser tratada como confiável naquele computador. **A função foi removida** e o `install.ps1` traz hoje, no lugar
-dela, um comentário proibindo a reintrodução.
+a ser tratada como confiável naquele computador. **A função foi removida** e, mais tarde, o próprio `install.ps1`
+foi removido do repositório. A proibição de reintrodução vive hoje no `AGENTS.md` (seção 4) e nos comentários de
+`installer/fzcomputerai.iss` e `.github/workflows/build-release.yml`.
 
 #### Remediação — se você executou a versão antiga do `install.ps1`
 
@@ -472,7 +477,7 @@ o caminho é submeter o arquivo como falso positivo ao fabricante do AV.
 | :--- | :--- |
 | `scripts/sign-release.ps1` | Assinatura local com o token plugado + verificação. Recusa-se a assinar com certificado autoassinado. |
 | `installer/fzcomputerai.iss` | Script do instalador (Inno Setup 6.3+). Cabeçalho documenta a mesma proibição descrita na seção 6. |
-| `install.ps1` | Instalador/compilador local para Windows. **Não assina nada e não mexe em certificados.** Continha até a v1.0.2 a função `Set-FzCodeSigning`, removida por segurança — histórico e remediação na [seção 10](#10-perguntas-frequentes). Traz hoje um comentário proibindo a reintrodução. |
+| `install.ps1` *(removido)* | Instalador de console para Windows que existia na raiz do repositório. Continha até a v1.0.2 a função `Set-FzCodeSigning`, removida por segurança — histórico e remediação na [seção 10](#10-perguntas-frequentes). O arquivo inteiro foi removido depois: a instalação no Windows é exclusivamente pelo instalador gráfico (`installer/fzcomputerai.iss`). |
 | `install.sh` | Equivalente para Linux/macOS. Apenas baixa/compila e posiciona o binário; nunca assinou nada. |
 | `.github/workflows/build-release.yml` | Build multiplataforma, geração do instalador, checksums, assinatura **condicional** e aviso quando não há certificado. O antigo step "Auto-Sign" (autoassinado) foi removido; bloco do Azure mantido comentado. |
 | `AGENTS.md` | Regras normativas para agentes de IA, incluindo a proibição de reintroduzir autoassinatura ou instalar CA na máquina do usuário. Aponta para este documento como fonte da verdade. |

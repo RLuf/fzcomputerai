@@ -74,23 +74,24 @@ O servidor expõe um conjunto de ferramentas MCP (*MCP Tools*) padronizadas para
 
 ---
 
-## 🖥️ Interface Gráfica Nativa (GUI Rust `fzcomputerai`)
+## 🖥️ Interface Gráfica Nativa (GUI Rust `fzcomputerai v2.0.0`)
 
-GUI nativa em Rust (`egui`/`eframe`, sem Chromium ou WebView), bilíngue **PT-BR / English** com alternância em tempo real. Organizada em **5 abas**:
+GUI nativa em Rust (`egui`/`eframe`, sem Chromium ou WebView), bilíngue **PT-BR / English** com alternância em tempo real. Organizada em **6 abas**:
 
 | Aba | Função |
 | :--- | :--- |
-| **MCP & Rede** | Configuração da porta HTTP do servidor MCP (`CUA_DRIVER_RS_MCP_HTTP_PORT`), regra portproxy (com elevação UAC quando necessária), teste real do endpoint `/mcp` via TCP, URL de rede com IP LAN detectado automaticamente e botão **Copiar**, opção **Iniciar com o Windows** (autostart) e **Console Debug** integrado. |
+| **MCP & Rede** | Configuração da porta HTTP do servidor MCP (`CUA_DRIVER_RS_MCP_HTTP_PORT`), regra Windows PortProxy (netsh) apontando para a porta CUA confirmada, teste real do endpoint `/mcp` via TCP, URL de rede com IP LAN autodetectado, botão **Verificar Atualizações** (GitHub Releases com auto-installer), **Iniciar com o Windows** (autostart) e **Console Debug** deduplicado com rolagem automática. |
+| **MCP Tools** | **[NOVO v2.0.0]** Catálogo visual completo para listar, filtrar por categoria e invocar interativamente qualquer ferramenta MCP do motor CUA. |
 | **Calibração & Visão** | Calibração de tela, DPI scaling e teste de clique por coordenadas. |
 | **Janelas & Processos** | Listagem de janelas ativas, inspeção UIA e lançamento de aplicativos. |
 | **Gravação Trajetória** | Início e parada de gravações de sessão/trajetória. |
 | **Doctor & Skills** | Diagnóstico de saúde (`doctor`) e instalação/atualização/remoção de skills. |
 
-Destaques:
-- **Console Debug**: todo comando executado pela GUI é registrado (comando, exit code, stdout, stderr) em painel dedicado na aba MCP & Rede.
-- **Status honesto**: o estado da porta/daemon exibido vem de um teste TCP real no endpoint `/mcp`, não de suposições.
-- **Iniciar com o Windows**: checkbox que registra/remove a GUI no autostart do usuário (`HKCU\...\Run`).
-- **Copiar URL MCP**: um clique copia `http://<IP_LAN>:<porta>/mcp` para a área de transferência.
+Destaques da v2.0.0 Stable:
+- **Catálogo MCP Tools**: execute chamadas CLI das ferramentas de visão e automação diretamente na GUI.
+- **Auto-Upgrade Inteligente**: checagem direta de releases no GitHub com download e instalação automática.
+- **Console Debug Formatado**: logs organizados com 2 linhas em branco de espaçamento e rolagem automática ao final.
+- **Instalador com Limpeza Automática**: encerramento de versões legadas e remoção de chaves antigas do Registro antes da nova instalação.
 
 ---
 
@@ -162,10 +163,12 @@ O instalador (Inno Setup, bilíngue PT-BR / English) faz:
 
 **a) Binário portátil** — baixe o `fzcomputerai-windows-x64.exe` do release e execute direto: sem instalação, sem atalhos, sem autostart e sem desinstalador; a atualização é manual. O mesmo aviso de SmartScreen se aplica.
 
-**b) Instalação remota via PowerShell (one-liner)**
+**b) Build local do instalador (para quem compila do fonte)** — o antigo `install.ps1` da raiz foi removido; o instalador gráfico é o único caminho de instalação no Windows. Quem compila do código-fonte gera o mesmo instalador localmente:
 ```powershell
-iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
+cargo build --release --manifest-path fzcomputerai/Cargo.toml
+ISCC.exe /DAppVersion=<versao> installer\fzcomputerai.iss
 ```
+> Requer o [Inno Setup](https://jrsoftware.org/isinfo.php) instalado (`ISCC.exe` no PATH ou caminho completo). O `fzcomputerai-setup-windows-x64.exe` resultante fica em `dist/`.
 
 ### 🐧 Linux & 🍎 macOS — Instalação Remota via Bash (One-liner)
 ```bash

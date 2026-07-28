@@ -74,23 +74,24 @@ The server exposes a standardized set of MCP tools (*MCP Tools*) for multimodal 
 
 ---
 
-## 🖥️ Native GUI (Rust `fzcomputerai`)
+## 🖥️ Native GUI (Rust `fzcomputerai v2.0.0`)
 
-Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / English** with real-time language toggle. Organized into **5 tabs**:
+Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / English** with real-time language toggle. Organized into **6 tabs**:
 
 | Tab | Purpose |
 | :--- | :--- |
-| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), portproxy rule (with UAC elevation when required), real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP and a **Copy** button, **Start with Windows** (autostart) option, and a built-in **Debug Console**. |
+| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), Windows PortProxy rule (netsh) connecting to confirmed CUA port, real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check for Updates** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
+| **MCP Tools** | **[NEW v2.0.0]** Interactive visual catalog to list, filter by category, and run any MCP vision & automation tool directly. |
 | **Calibration & Vision** | Screen calibration, DPI scaling, and coordinate click testing. |
 | **Windows & Apps** | Active window listing, UIA inspection, and application launching. |
 | **Recording Trajectory** | Start and stop session/trajectory recordings. |
 | **Doctor & Skills** | Health diagnostics (`doctor`) and skill install/update/uninstall. |
 
-Highlights:
-- **Debug Console**: every command executed by the GUI is logged (command, exit code, stdout, stderr) in a dedicated panel on the MCP & Network tab.
-- **Honest status**: the displayed port/daemon state comes from a real TCP test against the `/mcp` endpoint, not assumptions.
-- **Start with Windows**: checkbox that registers/removes the GUI from the user's autostart (`HKCU\...\Run`).
-- **Copy MCP URL**: one click copies `http://<LAN_IP>:<port>/mcp` to the clipboard.
+v2.0.0 Stable Highlights:
+- **MCP Tools Catalog**: run CLI calls for computer vision and automation tools directly from the GUI.
+- **Smart Auto-Upgrade**: direct GitHub Releases check with background download and automatic installation.
+- **Formatted Debug Console**: organized logs with 2 blank lines spacing and auto-scroll to bottom.
+- **Installer with Auto-Cleanup**: terminates legacy processes and removes stale Registry keys before fresh installation.
 
 ---
 
@@ -162,10 +163,12 @@ The installer (Inno Setup, bilingual PT-BR / English) does the following:
 
 **a) Portable binary** — download `fzcomputerai-windows-x64.exe` from the release and run it directly: no installation, no shortcuts, no autostart and no uninstaller; updates are manual. The same SmartScreen warning applies.
 
-**b) Remote installation via PowerShell (one-liner)**
+**b) Local installer build (for source builders)** — the old root `install.ps1` has been removed; the graphical installer is the only Windows installation path. If you build from source, generate the same installer locally:
 ```powershell
-iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
+cargo build --release --manifest-path fzcomputerai/Cargo.toml
+ISCC.exe /DAppVersion=<version> installer\fzcomputerai.iss
 ```
+> Requires [Inno Setup](https://jrsoftware.org/isinfo.php) installed (`ISCC.exe` on PATH or full path). The resulting `fzcomputerai-setup-windows-x64.exe` lands in `dist/`.
 
 ### 🐧 Linux & 🍎 macOS — Remote Installation via Bash (One-liner)
 ```bash

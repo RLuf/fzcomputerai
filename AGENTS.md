@@ -27,6 +27,14 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - **Versão SEMPRE via `env!("CARGO_PKG_VERSION")`** (ou `concat!` com ela). Nunca hardcode o número de versão em strings da UI — a fonte da verdade é o `Cargo.toml`.
 - **Todo handler de ação loga no Console Debug**: use `run_logged()` (comando, exit code, stdout, stderr, erros de spawn) ou `log_debug()` para eventos. O painel do Console Debug fica na aba MCP & Rede (limite de 64KB, mantém o final do log).
 - **Status honesto**: estados como `port_active`/`daemon_running` devem refletir verificação real (ex.: teste TCP no endpoint `/mcp`), nunca valores presumidos.
+- **Nomenclatura dos Binários Compilados:** cópias locais para teste/distribuição manual devem incluir a versão no
+  nome (ex.: `fzcomputerai-v2.0.0.exe`), mantendo a fonte de verdade em `Cargo.toml`. **EXCEÇÃO NORMATIVA — o
+  instalador do release NÃO leva versão no nome:** o asset publicado é sempre `fzcomputerai-setup-windows-x64.exe`,
+  porque o workflow de release (`INSTALLER_NAME` em `.github/workflows/build-release.yml`) e o
+  `OutputBaseFilename` do `installer/fzcomputerai.iss` formam um contrato de nome fixo — a versão vem do tag do
+  GitHub. Além disso, o fluxo de auto-upgrade da GUI (`check_for_updates`/`start_update_download` em
+  `fzcomputerai/src/app.rs`) baixa o instalador pelo nome fixo; renomear o asset quebra o upgrade de TODAS as
+  versões já instaladas. Quem quiser versão no nome do instalador precisa mudar os três lados juntos.
 
 ### 2. Comunicação MCP & Ferramentas de Visão
 - As ferramentas de visão computacional expostas via MCP são:
@@ -47,9 +55,11 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 > assinatura, certificados, instalador ou avisos do Windows. Esta seção é o resumo vinculante; o documento traz o
 > porquê, os custos e as opções reais.
 
-**Contexto:** uma versão anterior do `install.ps1` gerava um certificado auto-assinado e o instalava na Raiz
-Confiável do usuário final. Isso foi **removido por questão de segurança**. Esta seção existe para que a remoção
-não seja desfeita por um agente futuro agindo de boa-fé.
+**Contexto:** uma versão anterior do `install.ps1` (instalador de console que existia na raiz do repositório —
+o arquivo **não existe mais**; a instalação no Windows hoje é exclusivamente pelo instalador gráfico Inno Setup)
+gerava um certificado auto-assinado e o instalava na Raiz Confiável do usuário final. Isso foi **removido por
+questão de segurança**. Esta seção existe para que a remoção não seja desfeita por um agente futuro agindo de
+boa-fé.
 
 #### 4.1. Proibições absolutas
 
@@ -87,7 +97,7 @@ não em workflow de CI, não "temporariamente para testar"**:
 - Se encontrar código que viole 4.1, **remova-o e registre a remoção no `CHANGELOG.md`** — não o deixe
   desabilitado "por precaução".
 - Ao remover uma prática proibida, **deixe um comentário no arquivo** explicando o porquê, para impedir a
-  reintrodução (é o que já existe em `install.ps1`, `installer/fzcomputerai.iss`,
+  reintrodução (é o que já existe em `installer/fzcomputerai.iss`,
   `.github/workflows/build-release.yml` e `scripts/sign-release.ps1`).
 - **Não reescreva o histórico do `CHANGELOG.md`.** Uma promessa incorreta já publicada é corrigida com uma nota
   de correção na entrada original **mais** uma entrada nova, nunca apagando o registro.
@@ -107,11 +117,14 @@ cargo build --release --manifest-path fzcomputerai/Cargo.toml
 
 ### Instalação e Teste
 ```powershell
-# Via Script PowerShell local
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+# Windows: instalador gráfico (único caminho de instalação Windows) —
+# baixar fzcomputerai-setup-windows-x64.exe em
+# https://github.com/RLuf/fzcomputerai/releases/latest e executar.
+# Build local do instalador (requer Inno Setup / ISCC.exe):
+ISCC.exe /DAppVersion=<versao> installer\fzcomputerai.iss
 
-# Via Instalação Remota PowerShell (One-liner)
-iwr -useb https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.ps1 | iex
+# Linux/macOS: script de instalação
+curl -fsSL https://github.com/RLuf/fzcomputerai/raw/master/install.sh | bash
 
 # Via NPM Package Global
 npm install -g fzcomputerai

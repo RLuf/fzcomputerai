@@ -25,6 +25,7 @@ pub enum Tab {
     Windows,
     Recording,
     DoctorSkills,
+    McpTools,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -34,6 +35,14 @@ pub struct WindowItem {
     pub title: String,
     pub app_name: Option<String>,
     pub minimized: Option<bool>,
+}
+
+/// Ponto de status colorido DESENHADO (painter), em vez do caractere "●":
+/// a fonte proporcional padrão do egui não tem esse glifo e renderiza uma
+/// caixa vazia — que parece placeholder quebrado na tela.
+pub fn status_dot(ui: &mut egui::Ui, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(12.0, 12.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.5, color);
 }
 
 /// Cria um `Command` que, no Windows, NUNCA abre a janela preta de console
@@ -72,6 +81,20 @@ pub struct AppState {
     pub port_status: PortStatus,
     pub daemon_running: bool,
 
+    // Regra portproxy LAN -> localhost: estado REAL em DOIS niveis.
+    //   portproxy_active    = a regra EXISTE na config (netsh show v4tov4);
+    //   portproxy_effective = alem de existir, o LISTENER esta de pe no
+    //                         netstat (IP Helper servindo de fato).
+    // Regra na config sem listener e "SEM EFEITO" — nunca pinte verde.
+    pub portproxy_active: bool,
+    pub portproxy_effective: bool,
+
+    // VERDADE na tela: linhas LISTENING reais do netstat (porta configurada
+    // + qualquer porta no IP da LAN) e TODAS as regras portproxy v4tov4.
+    // A UI exibe isto cru — nada de host/URL "de intencao".
+    pub real_listeners: Vec<String>,
+    pub portproxy_rules: Vec<String>,
+
     // Calibração & Visão
     pub screen_width: u32,
     pub screen_height: u32,
@@ -101,6 +124,18 @@ pub struct AppState {
 
     // Iniciar com o Windows (HKCU\...\Run)
     pub autostart_enabled: bool,
+
+    // MCP Tools Catalog
+    pub mcp_tools_output: String,
+    pub mcp_tools_filter: String,
+
+    // Fluxo de upgrade (GitHub Releases):
+    //   check -> update_available(tag) -> download em BACKGROUND (%TEMP%)
+    //   -> ready.flag -> pedir para FECHAR -> instalar -> reabrir GUI + motor.
+    pub update_available: Option<String>,
+    pub update_downloading: bool,
+    pub update_ready: bool,
+    last_update_poll: Option<std::time::Instant>,
 }
 
 impl Default for AppState {
@@ -113,6 +148,10 @@ impl Default for AppState {
             port_active: false,
             port_status: PortStatus::Stopped,
             daemon_running: false,
+            portproxy_active: false,
+            portproxy_effective: false,
+            real_listeners: Vec::new(),
+            portproxy_rules: Vec::new(),
 
             screen_width: 1920,
             screen_height: 1080,
@@ -136,8 +175,17 @@ impl Default for AppState {
 
             debug_log: String::new(),
             autostart_enabled: false,
+
+            mcp_tools_output: String::new(),
+            mcp_tools_filter: String::new(),
+
+            update_available: None,
+            update_downloading: false,
+            update_ready: false,
+            last_update_poll: None,
         };
         state.log_debug(&format!("[startup] IP LAN autodetectado: {}", state.lan_ip));
+        state.startup_reconcile_tracked_rules();
         state.check_port_status();
         state.daemon_running = state.port_active;
         #[cfg(target_os = "windows")]
@@ -148,12 +196,16 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// Anexa uma entrada ao Console Debug (mantém tamanho limitado).
+    /// Anexa uma entrada ao Console Debug (mantém tamanho limitado e 2 linhas em branco de espaçamento).
     pub fn log_debug(&mut self, entry: &str) {
-        if !self.debug_log.is_empty() {
-            self.debug_log.push('\n');
+        let entry_clean = entry.trim();
+        if entry_clean.is_empty() {
+            return;
         }
-        self.debug_log.push_str(entry);
+        if !self.debug_log.is_empty() {
+            self.debug_log.push_str("\n\n");
+        }
+        self.debug_log.push_str(entry_clean);
 
         const MAX_LEN: usize = 64 * 1024;
         if self.debug_log.len() > MAX_LEN {
@@ -195,56 +247,82 @@ impl AppState {
         }
     }
 
-    /// Teste TCP REAL em um endereço: TcpStream::connect_timeout (~800ms) e,
-    /// se conectar, GET /mcp mínimo lendo a primeira linha da resposta.
-    /// Loga o resultado no Console Debug e retorna se conectou.
-    fn tcp_probe(&mut self, ip: &str, port: u16) -> bool {
+    /// Teste REAL do MCP em um endereço: conexao TCP + POST /mcp com um
+    /// JSON-RPC `initialize` de verdade. Retorna true SOMENTE quando a
+    /// resposta HTTP contem "jsonrpc" — o servidor MCP respondeu de fato.
+    /// GET nao serve como prova: o endpoint MCP legitimamente devolve
+    /// 405 Method Not Allowed para GET, o que so provava o TCP.
+    fn mcp_probe(&mut self, ip: &str, port: u16) -> bool {
         use std::io::{Read, Write};
 
         let addr: std::net::SocketAddr = match format!("{}:{}", ip, port).parse() {
             Ok(a) => a,
             Err(_) => {
                 self.log_debug(&format!(
-                    "> tcp-check {}:{}\n  ERRO: endereco invalido",
+                    "> mcp-check {}:{}\n  ERRO: endereco invalido",
                     ip, port
                 ));
                 return false;
             }
         };
-        let timeout = std::time::Duration::from_millis(800);
+        let timeout = std::time::Duration::from_millis(1200);
 
         match std::net::TcpStream::connect_timeout(&addr, timeout) {
             Ok(mut stream) => {
                 let _ = stream.set_read_timeout(Some(timeout));
                 let _ = stream.set_write_timeout(Some(timeout));
 
-                let request = format!(
-                    "GET /mcp HTTP/1.1\r\nHost: {}:{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-                    ip, port
+                let body = concat!(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fzcomputerai-gui","version":""#,
+                    env!("CARGO_PKG_VERSION"),
+                    r#""}}}"#
                 );
-                let first_line = match stream.write_all(request.as_bytes()) {
-                    Ok(()) => {
-                        let mut buf = [0u8; 1024];
-                        match stream.read(&mut buf) {
-                            Ok(n) if n > 0 => String::from_utf8_lossy(&buf[..n])
-                                .lines()
-                                .next()
-                                .unwrap_or("")
-                                .to_string(),
-                            Ok(_) => "(conexao fechada sem resposta HTTP)".to_string(),
-                            Err(e) => format!("(erro de leitura: {})", e),
-                        }
+                let request = format!(
+                    "POST /mcp HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    ip,
+                    port,
+                    body.len(),
+                    body
+                );
+
+                if let Err(e) = stream.write_all(request.as_bytes()) {
+                    self.log_debug(&format!(
+                        "> mcp-check {}:{}\n  TCP conectou mas a escrita falhou: {}",
+                        ip, port, e
+                    ));
+                    return false;
+                }
+
+                // Le ate 4KB (o initialize cabe com folga); o timeout de
+                // leitura encerra streams SSE que ficariam abertos.
+                let mut collected: Vec<u8> = Vec::new();
+                let mut buf = [0u8; 1024];
+                while collected.len() < 4096 {
+                    match stream.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => collected.extend_from_slice(&buf[..n]),
+                        Err(_) => break,
                     }
-                    Err(e) => format!("(erro de escrita: {})", e),
-                };
-                self.log_debug(&format!(
-                    "> tcp-check {}:{}\n  TCP conectado. GET /mcp -> {}",
-                    ip, port, first_line
-                ));
-                true
+                }
+                let text = String::from_utf8_lossy(&collected).to_string();
+                let status_line = text.lines().next().unwrap_or("(sem resposta)").to_string();
+
+                if text.contains("jsonrpc") {
+                    self.log_debug(&format!(
+                        "> mcp-check {}:{}\n  MCP OK — {} + resposta JSON-RPC ao initialize.",
+                        ip, port, status_line
+                    ));
+                    true
+                } else {
+                    self.log_debug(&format!(
+                        "> mcp-check {}:{}\n  TCP conectou mas a resposta NAO e MCP: {}",
+                        ip, port, status_line
+                    ));
+                    false
+                }
             }
             Err(e) => {
-                self.log_debug(&format!("> tcp-check {}:{}\n  SEM conexao ({})", ip, port, e));
+                self.log_debug(&format!("> mcp-check {}:{}\n  SEM conexao ({})", ip, port, e));
                 false
             }
         }
@@ -265,27 +343,52 @@ impl AppState {
         let want_lan = format!("{}:{}", lan_ip, port);
         let want_any = format!("0.0.0.0:{}", port);
         let suffix = format!(":{}", port);
+        let lan_prefix = format!("{}:", lan_ip);
 
         let mut matched: Vec<String> = Vec::new();
         let mut lan_listening = false;
         for line in text.lines() {
             let cols: Vec<&str> = line.split_whitespace().collect();
-            if cols.len() < 4 || !cols[0].eq_ignore_ascii_case("TCP") {
+            if cols.len() < 5 || !cols[0].eq_ignore_ascii_case("TCP") {
                 continue;
             }
             let local = cols[1];
-            // Listener no Windows: endereço remoto 0.0.0.0:0 e/ou estado LISTENING
-            let is_listener = cols[2] == "0.0.0.0:0" || line.to_uppercase().contains("LISTEN");
-            if !is_listener {
-                continue;
+            let remote = cols[2];
+            let state = cols[3];
+            let pid_txt = cols[4];
+
+            let is_listener = state.eq_ignore_ascii_case("LISTENING") || remote == "0.0.0.0:0";
+
+            // O que interessa na tela: QUALQUER linha (LISTENING e tambem
+            // ESTABLISHED — conexoes MCP reais em andamento) cujo endereco
+            // local OU remoto use a porta configurada, mais listeners em
+            // portas ALTAS (>=1024) no IP da LAN — assim um listener orfao
+            // (ex.: portproxy antigo em outra porta) aparece na tela, sem
+            // poluir com servicos de sistema (137/139/445...).
+            let local_port_high = local
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u16>().ok())
+                .map(|p| p >= 1024)
+                .unwrap_or(false);
+            let interesting = local.ends_with(&suffix)
+                || remote.ends_with(&suffix)
+                || (is_listener && local.starts_with(&lan_prefix) && local_port_high);
+            if interesting {
+                // MESMAS colunas do netstat real (local, remoto, estado,
+                // PID) para a tela bater 1:1 com o que o usuario ve no
+                // proprio terminal. Num listener em espera o "remoto" e
+                // 0.0.0.0:0 — e o formato do Windows, nao um destino.
+                matched.push(format!(
+                    "TCP  {:<22} {:<22} {:<12} pid {}",
+                    local, remote, state, pid_txt
+                ));
             }
-            if local.ends_with(&suffix) {
-                matched.push(line.trim().to_string());
-            }
-            if local == want_lan || local == want_any {
+            if is_listener && (local == want_lan || local == want_any) {
                 lan_listening = true;
             }
         }
+        self.real_listeners = matched.clone();
 
         if matched.is_empty() {
             self.log_debug(&format!(
@@ -321,8 +424,8 @@ impl AppState {
             }
         };
 
-        // 1) loopback
-        let local_ok = self.tcp_probe("127.0.0.1", port);
+        // 1) loopback — MCP de verdade (POST initialize), nao so TCP
+        let local_ok = self.mcp_probe("127.0.0.1", port);
 
         // 2) IP da LAN exibido na interface (o endereço publicado na URL MCP)
         let lan_ip = self.lan_ip.trim().to_string();
@@ -331,15 +434,32 @@ impl AppState {
             self.log_debug("[status] IP LAN e loopback — teste LAN nao se aplica.");
             false
         } else {
-            self.tcp_probe(&lan_ip, port)
+            self.mcp_probe(&lan_ip, port)
         };
 
-        // 3) fonte de verdade: netstat
-        let netstat_lan = if lan_is_loopback {
-            false
-        } else {
-            self.netstat_lan_listening(&lan_ip, port)
-        };
+        // 3) fonte de verdade: netstat (roda SEMPRE, para real_listeners
+        // refletir a verdade mesmo com IP loopback no campo)
+        let netstat_result = self.netstat_lan_listening(&lan_ip, port);
+        let netstat_lan = if lan_is_loopback { false } else { netstat_result };
+
+        // Badge do portproxy recalculado AQUI, junto do netstat que ja rodou:
+        // regra na config + listener LISTENING = funcionando; regra na config
+        // sem listener = SEM EFEITO (IP Helper nao subiu o listener).
+        #[cfg(target_os = "windows")]
+        {
+            let exists = if lan_is_loopback {
+                false
+            } else {
+                self.portproxy_rule_exists(&lan_ip, &port.to_string())
+            };
+            self.portproxy_active = exists;
+            self.portproxy_effective = exists && netstat_lan;
+            if exists && !netstat_lan {
+                self.log_debug(
+                    "[portproxy] Regra existe na config do netsh mas o listener NAO esta de pe — SEM EFEITO. Reinicie o servico IP Helper (iphlpsvc) ou remova e reaplique a regra.",
+                );
+            }
+        }
 
         if netstat_lan && !lan_ok {
             self.log_debug(
@@ -363,11 +483,12 @@ impl AppState {
 
         let resumo = match self.port_status {
             PortStatus::LanListening => format!(
-                "[status] LISTENING (local + LAN) — {}:{} confirmado no netstat e via TCP.",
-                lan_ip, port
+                "[status] LISTENING (local + LAN) — MCP respondeu JSON-RPC em 127.0.0.1:{p} E em {ip}:{p}; listener confirmado no netstat.",
+                p = port,
+                ip = lan_ip
             ),
             PortStatus::LocalOnly => format!(
-                "[status] LOCAL APENAS — porta {} responde em 127.0.0.1 mas NAO e acessivel pela LAN ({}).",
+                "[status] LOCAL APENAS — MCP responde em 127.0.0.1:{} mas NAO e acessivel pela LAN ({}).",
                 port, lan_ip
             ),
             PortStatus::Stopped => format!("[status] STOPPED — nada respondeu na porta {}.", port),
@@ -375,49 +496,125 @@ impl AppState {
         self.log_debug(&resumo);
     }
 
-    /// Define CUA_DRIVER_RS_MCP_HTTP_PORT (User) pela via oficial e RELÊ a
-    /// variável no registro para confirmar sucesso/falha real.
+    /// Grava uma variavel em HKCU\Environment pela via oficial e RELÊ o
+    /// registro para confirmar sucesso/falha real. Retorna true somente com
+    /// o valor confirmado.
+    #[cfg(target_os = "windows")]
+    fn set_user_env_confirmed(&mut self, name: &str, value: &str) -> bool {
+        let ps = format!(
+            "[Environment]::SetEnvironmentVariable('{}', '{}', 'User')",
+            name, value
+        );
+        let set_ok = self
+            .run_logged("powershell", &["-NoProfile", "-Command", ps.as_str()])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        let confirmed = self
+            .run_logged("reg", &["query", r"HKCU\Environment", "/v", name])
+            .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains(value))
+            .unwrap_or(false);
+
+        set_ok && confirmed
+    }
+
+    /// Define CUA_DRIVER_RS_MCP_HTTP_PORT + CUA_DRIVER_RS_MCP_HTTP_BIND
+    /// (User) e reinicia o daemon. O bind vai para 0.0.0.0 (todas as
+    /// interfaces); se o daemon nao conseguir/nao subir na LAN, o
+    /// check_port_status mostra honestamente LOCAL APENAS (fallback
+    /// 127.0.0.1) — nunca presumimos que a LAN esta servida.
     pub fn apply_env_port(&mut self) {
         #[cfg(target_os = "windows")]
         {
             let port = self.http_port.trim().to_string();
-            let ps = format!(
-                "[Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '{}', 'User')",
-                port
-            );
-            let set_ok = self
-                .run_logged("powershell", &["-NoProfile", "-Command", ps.as_str()])
-                .map(|o| o.status.success())
-                .unwrap_or(false);
 
-            let confirmed = self
-                .run_logged(
-                    "reg",
-                    &[
-                        "query",
-                        r"HKCU\Environment",
-                        "/v",
-                        "CUA_DRIVER_RS_MCP_HTTP_PORT",
-                    ],
-                )
-                .map(|o| {
-                    o.status.success()
-                        && String::from_utf8_lossy(&o.stdout).contains(port.as_str())
-                })
-                .unwrap_or(false);
-
-            if set_ok && confirmed {
+            let port_ok = self.set_user_env_confirmed("CUA_DRIVER_RS_MCP_HTTP_PORT", &port);
+            if port_ok {
                 self.log_debug(&format!(
                     "[env] OK: CUA_DRIVER_RS_MCP_HTTP_PORT = {} confirmado em HKCU\\Environment.",
                     port
                 ));
             } else {
                 self.log_debug(
-                    "[env] FALHA: valor NAO confirmado em HKCU\\Environment apos SetEnvironmentVariable.",
+                    "[env] FALHA: CUA_DRIVER_RS_MCP_HTTP_PORT NAO confirmado em HKCU\\Environment.",
                 );
+            }
+
+            let bind_ok = self.set_user_env_confirmed("CUA_DRIVER_RS_MCP_HTTP_BIND", "0.0.0.0");
+            if bind_ok {
+                self.log_debug(
+                    "[env] OK: CUA_DRIVER_RS_MCP_HTTP_BIND = 0.0.0.0 confirmado (todas as interfaces).",
+                );
+            } else {
+                self.log_debug(
+                    "[env] FALHA: CUA_DRIVER_RS_MCP_HTTP_BIND NAO confirmado — o daemon pode continuar so em 127.0.0.1.",
+                );
+            }
+
+            if port_ok || bind_ok {
+                self.log_debug("[env] Reiniciando daemon cua-driver para aplicar a configuracao...");
+                self.run_logged("cua-driver", &["stop"]);
+                self.run_logged("cua-driver", &["autostart", "kick"]);
             }
         }
         self.check_port_status();
+    }
+
+    /// Porta CUA CONFIGURADA e CONFIRMADA — nunca chutada.
+    /// Ordem dos candidatos: (1) CUA_DRIVER_RS_MCP_HTTP_PORT em
+    /// HKCU\Environment (a configuracao real do daemon), (2) a porta do campo
+    /// da UI, (3) o default 8000. Retorna a PRIMEIRA que RESPONDER de fato em
+    /// 127.0.0.1 (tcp_probe). Nenhuma respondeu => None: quem chamar decide o
+    /// que fazer, mas regra de encaminhamento para porta morta NAO se cria.
+    pub fn detect_confirmed_cua_port(&mut self) -> Option<u16> {
+        let mut candidates: Vec<u16> = Vec::new();
+
+        #[cfg(target_os = "windows")]
+        if let Some(out) = self.run_logged(
+            "reg",
+            &[
+                "query",
+                r"HKCU\Environment",
+                "/v",
+                "CUA_DRIVER_RS_MCP_HTTP_PORT",
+            ],
+        ) {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                for line in text.lines() {
+                    if line.contains("CUA_DRIVER_RS_MCP_HTTP_PORT") {
+                        if let Some(tok) = line.split_whitespace().last() {
+                            if let Ok(p) = tok.parse::<u16>() {
+                                candidates.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Ok(p) = self.http_port.trim().parse::<u16>() {
+            if !candidates.contains(&p) {
+                candidates.push(p);
+            }
+        }
+        if !candidates.contains(&8000) {
+            candidates.push(8000);
+        }
+
+        for p in candidates {
+            if self.mcp_probe("127.0.0.1", p) {
+                self.log_debug(&format!(
+                    "[portproxy] Porta CUA confirmada respondendo MCP em 127.0.0.1:{}.",
+                    p
+                ));
+                return Some(p);
+            }
+        }
+        self.log_debug(
+            "[portproxy] NENHUM candidato de porta CUA respondeu em 127.0.0.1 (config HKCU, campo da UI e 8000 testados).",
+        );
+        None
     }
 
     /// Lê `netsh interface portproxy show v4tov4` e retorna true se existe
@@ -428,6 +625,22 @@ impl AppState {
         match self.run_logged("netsh", &["interface", "portproxy", "show", "v4tov4"]) {
             Some(show) => {
                 let text = String::from_utf8_lossy(&show.stdout).to_string();
+                // Guarda TODAS as regras v4tov4 (linhas com portas numericas)
+                // para a UI listar — inclusive regras orfas em outras portas.
+                self.portproxy_rules = text
+                    .lines()
+                    .filter_map(|line| {
+                        let cols: Vec<&str> = line.split_whitespace().collect();
+                        if cols.len() >= 4
+                            && cols[1].parse::<u16>().is_ok()
+                            && cols[3].parse::<u16>().is_ok()
+                        {
+                            Some(format!("{}:{} -> {}:{}", cols[0], cols[1], cols[2], cols[3]))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
                 text.lines().any(|line| {
                     let cols: Vec<&str> = line.split_whitespace().collect();
                     cols.len() >= 2 && cols[0] == ip && cols[1] == port
@@ -448,7 +661,7 @@ impl AppState {
     pub fn apply_portproxy(&mut self) {
         #[cfg(target_os = "windows")]
         {
-            let port = self.http_port.trim().to_string();
+            let listen_port = self.http_port.trim().to_string();
             let ip = self.lan_ip.trim().to_string();
 
             if ip == "127.0.0.1" || ip.eq_ignore_ascii_case("localhost") {
@@ -457,22 +670,52 @@ impl AppState {
                 );
                 return;
             }
-            if port.parse::<u16>().is_err() {
-                self.log_debug("[portproxy] Porta invalida — corrija o campo Porta.");
-                return;
-            }
+            let listen_port_num: u16 = match listen_port.parse() {
+                Ok(p) => p,
+                Err(_) => {
+                    self.log_debug("[portproxy] Porta invalida — corrija o campo Porta.");
+                    return;
+                }
+            };
+
+            // Destino da regra: a porta CUA CONFIGURADA e CONFIRMADA por teste
+            // TCP real — nunca a porta "sugerida" sem confirmacao. Sem porta
+            // confirmada nao se cria regra nenhuma (encaminhar para porta
+            // morta so mascara o problema).
+            let connect_port = match self.detect_confirmed_cua_port() {
+                Some(p) => p,
+                None => {
+                    self.log_debug(
+                        "[portproxy] Regra NAO criada: nenhuma porta CUA confirmada em 127.0.0.1. Inicie o daemon (botao Iniciar) e tente de novo.",
+                    );
+                    self.check_port_status();
+                    return;
+                }
+            };
 
             // Etapa 1: regra já existe?
-            if self.portproxy_rule_exists(&ip, &port) {
+            if self.portproxy_rule_exists(&ip, &listen_port) {
                 self.log_debug(&format!(
                     "[portproxy] Regra {}:{} -> 127.0.0.1:{} JA existe — pulando o add.",
-                    ip, port, port
+                    ip, listen_port, connect_port
                 ));
+            } else if self.netstat_lan_listening(&ip, listen_port_num) {
+                // Ja ha um listener REAL em <lan>:<porta> que NAO e regra
+                // portproxy (ex.: o proprio daemon com bind 0.0.0.0, ou outro
+                // processo). Criar a regra sobrescreveria/conflitaria com a
+                // porta de um processo existente — nao fazemos isso.
+                self.log_debug(&format!(
+                    "[portproxy] Ja existe listener em {}:{} que NAO e regra portproxy (bind 0.0.0.0 do daemon ou outro processo). Nada foi alterado.",
+                    ip, listen_port
+                ));
+                self.portproxy_active = false;
+                self.check_port_status();
+                return;
             } else {
                 // Etapa 2: aplicar (direto; se falhar, elevado via UAC)
                 let netsh_args = format!(
                     "interface portproxy add v4tov4 listenport={} listenaddress={} connectport={} connectaddress=127.0.0.1",
-                    port, ip, port
+                    listen_port, ip, connect_port
                 );
                 let args_vec: Vec<&str> = netsh_args.split(' ').collect();
 
@@ -508,12 +751,33 @@ impl AppState {
             }
 
             // Etapa 3: reler a verdade do netsh
-            let rule_ok = self.portproxy_rule_exists(&ip, &port);
+            let rule_ok = self.portproxy_rule_exists(&ip, &listen_port);
+            self.portproxy_active = rule_ok;
             if rule_ok {
                 self.log_debug(&format!(
                     "[portproxy] Regra CONFIRMADA no show v4tov4: {}:{} -> 127.0.0.1:{}",
-                    ip, port, port
+                    ip, listen_port, connect_port
                 ));
+                // Registra a regra como PROPRIEDADE deste app (HKCU). O
+                // shutdown_cleanup so remove regras registradas aqui —
+                // nunca regras de outros servicos com o mesmo padrao
+                // (ex.: 8082->8082 ou 9333->9222 de outras ferramentas).
+                let value_name = format!("portproxy:{}:{}", ip, listen_port);
+                let cp = connect_port.to_string();
+                let _ = self.run_logged(
+                    "reg",
+                    &[
+                        "add",
+                        r"HKCU\Software\FzComputerAI",
+                        "/v",
+                        value_name.as_str(),
+                        "/t",
+                        "REG_SZ",
+                        "/d",
+                        cp.as_str(),
+                        "/f",
+                    ],
+                );
             } else {
                 self.log_debug(
                     "[portproxy] Regra NAO encontrada em 'show v4tov4' — nada foi aplicado.",
@@ -521,7 +785,7 @@ impl AppState {
             }
 
             // Etapa 4: confirmar com netstat (o listener do portproxy e do iphlpsvc)
-            if let Ok(p) = port.parse::<u16>() {
+            if let Ok(p) = listen_port.parse::<u16>() {
                 let listening = self.netstat_lan_listening(&ip, p);
                 if rule_ok && !listening {
                     self.log_debug(
@@ -531,6 +795,242 @@ impl AppState {
             }
         }
         // Etapa 5: teste TCP real nos dois endereços + status
+        self.check_port_status();
+    }
+
+    /// Regras portproxy registradas como PROPRIEDADE deste app em
+    /// HKCU\Software\FzComputerAI (valores "portproxy:<ip>:<porta>").
+    #[cfg(target_os = "windows")]
+    fn tracked_portproxy_rules() -> Vec<(String, String)> {
+        let mut tracked: Vec<(String, String)> = Vec::new();
+        if let Ok(out) = quiet_cmd("reg")
+            .args(["query", r"HKCU\Software\FzComputerAI"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            for line in text.lines() {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if let Some(name) = cols.first() {
+                    if let Some(rest) = name.strip_prefix("portproxy:") {
+                        if let Some((ip, port)) = rest.rsplit_once(':') {
+                            if port.parse::<u16>().is_ok() {
+                                tracked.push((ip.to_string(), port.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        tracked
+    }
+
+    /// RECONCILIACAO NA ABERTURA: um fechamento anterior pode ter falhado
+    /// (kill forcado, UAC recusado, queda de energia) e deixado regras
+    /// portproxy NOSSAS vivas — portas abertas com o software "fechado".
+    /// Aqui, toda regra RASTREADA encontrada na config do netsh e removida
+    /// (tentativa direta; sem privilegio, o usuario e avisado no console e
+    /// a regra sai no proximo fechamento com UAC ou pelo botao Remover).
+    pub fn startup_reconcile_tracked_rules(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            let tracked = Self::tracked_portproxy_rules();
+            if tracked.is_empty() {
+                return;
+            }
+            for (ip, port) in tracked {
+                if !self.portproxy_rule_exists(&ip, &port) {
+                    // Regra ja nao existe — apenas desregistra.
+                    let value_name = format!("portproxy:{}:{}", ip, port);
+                    let _ = quiet_cmd("reg")
+                        .args([
+                            "delete",
+                            r"HKCU\Software\FzComputerAI",
+                            "/v",
+                            value_name.as_str(),
+                            "/f",
+                        ])
+                        .output();
+                    continue;
+                }
+                self.log_debug(&format!(
+                    "[startup] Sobra de sessao anterior: regra portproxy {}:{} ainda ativa — removendo...",
+                    ip, port
+                ));
+                let ok = quiet_cmd("netsh")
+                    .args([
+                        "interface",
+                        "portproxy",
+                        "delete",
+                        "v4tov4",
+                        &format!("listenport={}", port),
+                        &format!("listenaddress={}", ip),
+                    ])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                if ok && !self.portproxy_rule_exists(&ip, &port) {
+                    self.log_debug("[startup] Sobra removida e confirmada no show v4tov4.");
+                    let value_name = format!("portproxy:{}:{}", ip, port);
+                    let _ = quiet_cmd("reg")
+                        .args([
+                            "delete",
+                            r"HKCU\Software\FzComputerAI",
+                            "/v",
+                            value_name.as_str(),
+                            "/f",
+                        ])
+                        .output();
+                } else {
+                    self.log_debug(
+                        "[startup] AVISO: sem privilegio para remover a sobra agora. Ela sera removida no fechamento (UAC) ou use o botao Remover Regra.",
+                    );
+                }
+            }
+        }
+    }
+
+    /// Encerramento LIMPO ao fechar a GUI (chamado pelo on_exit do eframe):
+    ///   1. para/mata o daemon cua-driver;
+    ///   2. remove as regras portproxy QUE ESTE APP CRIOU — as registradas
+    ///      em HKCU\Software\FzComputerAI (valores "portproxy:<ip>:<porta>").
+    /// NUNCA apaga regra por "padrao parecido": nesta mesma maquina existem
+    /// regras LAN->127.0.0.1 de OUTROS servicos (ex.: 8082->8082,
+    /// 9333->9222) que nao sao nossas e nao podem ser tocadas.
+    ///
+    /// CRITICO — POR QUE ISTO E DESACOPLADO (nao mexa): a versao anterior
+    /// fazia a limpeza AQUI, de forma bloqueante, incluindo
+    /// `Start-Process -Verb RunAs -Wait` para elevar o netsh. Como o netsh
+    /// delete exige admin, TODO fechamento abria um UAC e o processo ficava
+    /// preso esperando resposta — o app simplesmente NAO FECHAVA (janela
+    /// some, processo vivo, portas abertas). Agora o on_exit apenas DISPARA
+    /// um auxiliar independente (spawn, sem wait) e retorna na hora: quem
+    /// espera o app morrer, mata o motor, elimina as regras e lida com o UAC
+    /// e o auxiliar — nunca a GUI.
+    pub fn shutdown_cleanup(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            let my_pid = std::process::id();
+            let ps = format!(
+                "$ErrorActionPreference='SilentlyContinue'; \
+                 $deadline=(Get-Date).AddSeconds(20); \
+                 while ((Get-Process -Id {pid} -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {{ Start-Sleep -Milliseconds 300 }}; \
+                 Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue; \
+                 cua-driver stop | Out-Null; \
+                 taskkill /F /IM cua-driver.exe | Out-Null; \
+                 $key='HKCU:\\Software\\FzComputerAI'; \
+                 $props = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue); \
+                 if (-not $props) {{ exit 0 }}; \
+                 $rules = @($props.PSObject.Properties | Where-Object {{ $_.Name -like 'portproxy:*' }} | ForEach-Object {{ $_.Name.Substring(10) }}); \
+                 if ($rules.Count -eq 0) {{ exit 0 }}; \
+                 $pend=@(); \
+                 foreach ($r in $rules) {{ \
+                   $i=$r.LastIndexOf(':'); $addr=$r.Substring(0,$i); $prt=$r.Substring($i+1); \
+                   netsh interface portproxy delete v4tov4 listenport=$prt listenaddress=$addr | Out-Null; \
+                   $left = (netsh interface portproxy show v4tov4 | Select-String (\"^\\s*\" + [regex]::Escape($addr) + \"\\s+\" + $prt + \"\\s\")); \
+                   if ($left) {{ $pend += \"netsh interface portproxy delete v4tov4 listenport=$prt listenaddress=$addr\" }} \
+                   else {{ Remove-ItemProperty -Path $key -Name (\"portproxy:\" + $r) -Force -ErrorAction SilentlyContinue }} \
+                 }}; \
+                 if ($pend.Count -gt 0) {{ \
+                   Start-Process -FilePath powershell -ArgumentList ('-NoProfile -WindowStyle Hidden -Command \"' + ($pend -join '; ') + '\"') -Verb RunAs -Wait; \
+                   foreach ($r in $rules) {{ \
+                     $i=$r.LastIndexOf(':'); $addr=$r.Substring(0,$i); $prt=$r.Substring($i+1); \
+                     $left = (netsh interface portproxy show v4tov4 | Select-String (\"^\\s*\" + [regex]::Escape($addr) + \"\\s+\" + $prt + \"\\s\")); \
+                     if (-not $left) {{ Remove-ItemProperty -Path $key -Name (\"portproxy:\" + $r) -Force -ErrorAction SilentlyContinue }} \
+                   }} \
+                 }}",
+                pid = my_pid
+            );
+
+            // spawn(), NUNCA output()/wait(): o auxiliar vive por conta
+            // propria e o processo da GUI pode terminar imediatamente.
+            let _ = quiet_cmd("powershell")
+                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps.as_str()])
+                .spawn();
+        }
+    }
+
+    /// Remove a regra portproxy (netsh delete) com o MESMO fluxo honesto do
+    /// apply_portproxy: tentativa direta, fallback elevado via UAC oficial e
+    /// confirmação relendo `show v4tov4` — o estado exibido nunca é presumido.
+    pub fn remove_portproxy(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            let listen_port = self.http_port.trim().to_string();
+            let ip = self.lan_ip.trim().to_string();
+
+            if listen_port.parse::<u16>().is_err() {
+                self.log_debug("[portproxy] Porta invalida — corrija o campo Porta.");
+                return;
+            }
+
+            if !self.portproxy_rule_exists(&ip, &listen_port) {
+                self.log_debug(&format!(
+                    "[portproxy] Nenhuma regra {}:{} para remover.",
+                    ip, listen_port
+                ));
+                self.portproxy_active = false;
+                return;
+            }
+
+            let netsh_args = format!(
+                "interface portproxy delete v4tov4 listenport={} listenaddress={}",
+                listen_port, ip
+            );
+            let args_vec: Vec<&str> = netsh_args.split(' ').collect();
+
+            let direct_ok = self
+                .run_logged("netsh", &args_vec)
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if direct_ok {
+                self.log_debug("[portproxy] netsh delete direto concluiu com exit 0.");
+            } else {
+                self.log_debug(
+                    "[portproxy] Delete direto falhou — solicitando elevacao (UAC)...",
+                );
+                let ps = format!(
+                    "$p = Start-Process -FilePath netsh -ArgumentList '{}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
+                    netsh_args
+                );
+                match self.run_logged("powershell", &["-NoProfile", "-Command", ps.as_str()]) {
+                    Some(o) if o.status.success() => {
+                        self.log_debug("[portproxy] netsh delete elevado concluiu com exit 0.")
+                    }
+                    Some(o) => self.log_debug(&format!(
+                        "[portproxy] netsh delete elevado FALHOU ou UAC foi cancelado (exit {:?}).",
+                        o.status.code()
+                    )),
+                    None => {}
+                }
+            }
+
+            // Verdade final: reler o netsh.
+            let still_there = self.portproxy_rule_exists(&ip, &listen_port);
+            self.portproxy_active = still_there;
+            if still_there {
+                self.log_debug(
+                    "[portproxy] Regra AINDA presente apos o delete — nada foi removido.",
+                );
+            } else {
+                self.log_debug(&format!(
+                    "[portproxy] Regra {}:{} removida e confirmada no show v4tov4.",
+                    ip, listen_port
+                ));
+                // Regra removida => sai tambem do registro de propriedade.
+                let value_name = format!("portproxy:{}:{}", ip, listen_port);
+                let _ = self.run_logged(
+                    "reg",
+                    &[
+                        "delete",
+                        r"HKCU\Software\FzComputerAI",
+                        "/v",
+                        value_name.as_str(),
+                        "/f",
+                    ],
+                );
+            }
+        }
         self.check_port_status();
     }
 
@@ -746,6 +1246,253 @@ impl AppState {
         self.run_skills("uninstall");
     }
 
+    /// Reinicia a task de autostart do daemon.
+    pub fn kick_autostart(&mut self) {
+        let _ = self.run_logged("cua-driver", &["autostart", "kick"]);
+        self.check_port_status();
+        self.daemon_running = self.port_active;
+    }
+
+    /// Invoca qualquer tool MCP do CUA via CLI e captura o resultado.
+    pub fn call_mcp_tool(&mut self, tool_name: &str, extra_args: &[&str]) {
+        let mut args = vec!["call", tool_name];
+        args.extend_from_slice(extra_args);
+        match self.run_logged("cua-driver", &args) {
+            Some(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                self.mcp_tools_output = if !stdout.is_empty() {
+                    format!("[{}] OK:\n{}", tool_name, stdout)
+                } else if !stderr.is_empty() {
+                    format!("[{}] stderr:\n{}", tool_name, stderr)
+                } else {
+                    format!("[{}]: exit {:?} (sem saida)", tool_name, out.status.code())
+                };
+            }
+            None => {
+                self.mcp_tools_output = format!(
+                    "ERRO: nao foi possivel executar 'cua-driver call {}' (esta no PATH?).",
+                    tool_name
+                );
+            }
+        }
+    }
+
+    /// Diretorio de staging do upgrade em %TEMP% (download + flag de pronto).
+    fn update_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join("fzcomputerai-update")
+    }
+
+    /// true somente se `remote` for ESTRITAMENTE mais nova que `local`
+    /// (comparacao numerica major.minor.patch). Igual ou mais antiga =>
+    /// false: /releases/latest e um ponteiro mutavel no GitHub e apontar
+    /// para um tag antigo (rollback de release) NAO pode virar downgrade
+    /// silencioso aqui.
+    fn version_newer(remote: &str, local: &str) -> bool {
+        fn parts(v: &str) -> [u64; 3] {
+            let mut out = [0u64; 3];
+            for (i, seg) in v.split('.').take(3).enumerate() {
+                let digits: String = seg.chars().take_while(|c| c.is_ascii_digit()).collect();
+                out[i] = digits.parse().unwrap_or(0);
+            }
+            out
+        }
+        parts(remote) > parts(local)
+    }
+
+    /// PASSO 1 do upgrade: consulta rapida ao GitHub Releases. Se houver
+    /// versao mais nova, apenas MARCA update_available — o download so
+    /// comeca depois que o usuario confirmar no dialogo (nada e baixado nem
+    /// instalado sem consentimento).
+    pub fn check_for_updates(&mut self) {
+        self.log_debug("[upgrade] Verificando novas versoes no GitHub Releases...");
+        let ps_cmd = "$r = Invoke-RestMethod -Uri 'https://api.github.com/repos/RLuf/fzcomputerai/releases/latest' -Headers @{'User-Agent'='FzComputerAI'}; Write-Output $r.tag_name";
+        match self.run_logged("powershell", &["-NoProfile", "-Command", ps_cmd]) {
+            Some(out) if out.status.success() => {
+                let tag = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let current_ver = env!("CARGO_PKG_VERSION");
+                self.log_debug(&format!(
+                    "[upgrade] Versao atual: v{} | Ultima release: {}",
+                    current_ver, tag
+                ));
+                let clean_tag = tag.trim_start_matches('v');
+                if Self::version_newer(clean_tag, current_ver) {
+                    self.log_debug(&format!(
+                        "[upgrade] Nova versao disponivel: {}. Aguardando confirmacao para baixar em segundo plano.",
+                        tag
+                    ));
+                    self.update_available = Some(tag);
+                } else if !clean_tag.is_empty() && clean_tag != current_ver {
+                    // Release "latest" mais ANTIGA que a instalada (rollback
+                    // no GitHub). Informar, nunca fazer downgrade sozinho.
+                    self.log_debug(&format!(
+                        "[upgrade] A release marcada como latest ({}) NAO e mais nova que a versao instalada (v{}). Nenhum downgrade automatico sera feito.",
+                        tag, current_ver
+                    ));
+                } else {
+                    self.log_debug(&format!(
+                        "[upgrade] Voce ja esta utilizando a versao mais recente (v{}).",
+                        current_ver
+                    ));
+                }
+            }
+            Some(_) => {
+                self.log_debug("[upgrade] Nao foi possivel consultar a API do GitHub Releases.");
+            }
+            None => {
+                self.log_debug("[upgrade] Falha ao executar verificacao de atualizacoes.");
+            }
+        }
+    }
+
+    /// PASSO 2: download do instalador em PROCESSO SEPARADO (a UI nao trava).
+    /// O processo grava ready.flag ao terminar; poll_update_download observa.
+    pub fn start_update_download(&mut self) {
+        let Some(tag) = self.update_available.clone() else {
+            return;
+        };
+        #[cfg(target_os = "windows")]
+        {
+            let dir = Self::update_dir();
+            // Baixa o instalador E o .sha256 publicado pelo CI, confere o
+            // hash (Get-FileHash) e SO grava ready.flag com hash conferido.
+            // Divergencia => error.flag + instalador apagado: executavel
+            // baixado sem integridade conferida nunca roda (SIGNING.md §3).
+            let ps = format!(
+                "$ErrorActionPreference='Stop'; \
+                 $d = '{dir}'; \
+                 New-Item -ItemType Directory -Force -Path $d | Out-Null; \
+                 Remove-Item (Join-Path $d 'ready.flag'),(Join-Path $d 'error.flag') -Force -ErrorAction SilentlyContinue; \
+                 $t = Join-Path $d 'fzcomputerai-setup-windows-x64.exe'; \
+                 try {{ \
+                   Invoke-WebRequest -Uri 'https://github.com/RLuf/fzcomputerai/releases/download/{tag}/fzcomputerai-setup-windows-x64.exe' -OutFile $t -UseBasicParsing; \
+                   Invoke-WebRequest -Uri 'https://github.com/RLuf/fzcomputerai/releases/download/{tag}/fzcomputerai-setup-windows-x64.exe.sha256' -OutFile \"$t.sha256\" -UseBasicParsing; \
+                   $expected = ((Get-Content \"$t.sha256\" -TotalCount 1) -split '\\s+')[0].ToLower(); \
+                   $actual = (Get-FileHash -Path $t -Algorithm SHA256).Hash.ToLower(); \
+                   if ($expected -ne $actual) {{ throw \"SHA256 nao confere: esperado $expected, obtido $actual\" }}; \
+                   New-Item -ItemType File -Force -Path (Join-Path $d 'ready.flag') | Out-Null \
+                 }} catch {{ \
+                   Set-Content -Path (Join-Path $d 'error.flag') -Value $_.Exception.Message; \
+                   Remove-Item $t -Force -ErrorAction SilentlyContinue \
+                 }}",
+                dir = dir.display(),
+                tag = tag
+            );
+            match quiet_cmd("powershell")
+                .args(["-NoProfile", "-Command", ps.as_str()])
+                .spawn()
+            {
+                Ok(_) => {
+                    self.update_downloading = true;
+                    self.log_debug(&format!(
+                        "[upgrade] Download do instalador {} iniciado em SEGUNDO PLANO para {}.",
+                        tag,
+                        dir.display()
+                    ));
+                }
+                Err(e) => {
+                    self.log_debug(&format!(
+                        "[upgrade] ERRO ao iniciar o download em background: {}",
+                        e
+                    ));
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.log_debug("[upgrade] Auto-upgrade disponivel apenas no Windows.");
+        }
+    }
+
+    /// PASSO 3: observado a cada ~1s pelo loop da UI enquanto ha download em
+    /// andamento. Quando ready.flag existe E o .exe esta la, marca pronto —
+    /// dai o dialogo pede para FECHAR e instalar.
+    pub fn poll_update_download(&mut self) {
+        if !self.update_downloading || self.update_ready {
+            return;
+        }
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_update_poll {
+            if now.duration_since(last).as_millis() < 1000 {
+                return;
+            }
+        }
+        self.last_update_poll = Some(now);
+
+        let dir = Self::update_dir();
+        let flag = dir.join("ready.flag");
+        let err_flag = dir.join("error.flag");
+        let setup = dir.join("fzcomputerai-setup-windows-x64.exe");
+
+        if err_flag.exists() {
+            let msg = std::fs::read_to_string(&err_flag).unwrap_or_default();
+            self.update_downloading = false;
+            self.update_available = None;
+            self.log_debug(&format!(
+                "[upgrade] FALHA no download/verificacao do instalador: {}",
+                msg.trim()
+            ));
+            return;
+        }
+
+        if flag.exists() && setup.exists() {
+            self.update_downloading = false;
+            self.update_ready = true;
+            self.log_debug(&format!(
+                "[upgrade] Download concluido e SHA256 conferido: {}. Aguardando confirmacao para FECHAR e instalar.",
+                setup.display()
+            ));
+        }
+    }
+
+    /// PASSO 4: dispara o processo de instalacao em background e retorna.
+    /// O chamador (UI) fecha o aplicativo em seguida. O processo externo:
+    /// espera este exe sair (ate 30s), GARANTE encerrado (Stop-Process),
+    /// encerra o cua-driver, instala /VERYSILENT e reabre a GUI + motor
+    /// (autostart kick). Nada de "instalar por cima" com o app aberto.
+    pub fn install_update_and_restart(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            let dir = Self::update_dir();
+            let current_exe = std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let ps = format!(
+                "$d = '{dir}'; \
+                 $t = Join-Path $d 'fzcomputerai-setup-windows-x64.exe'; \
+                 if (-not (Test-Path $t)) {{ exit 1 }}; \
+                 $deadline = (Get-Date).AddSeconds(30); \
+                 while ((Get-Process fzcomputerai -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {{ Start-Sleep -Milliseconds 500 }}; \
+                 Stop-Process -Name fzcomputerai -Force -ErrorAction SilentlyContinue; \
+                 Stop-Process -Name cua-driver -Force -ErrorAction SilentlyContinue; \
+                 Start-Sleep -Seconds 1; \
+                 Start-Process -FilePath $t -ArgumentList '/VERYSILENT /NORESTART' -Wait; \
+                 $exe = Join-Path $env:LOCALAPPDATA 'Programs\\FzComputerAI\\fzcomputerai.exe'; \
+                 if (-not (Test-Path $exe)) {{ $exe = '{cur}' }}; \
+                 if (Test-Path $exe) {{ Start-Process -FilePath $exe }}; \
+                 cua-driver autostart kick",
+                dir = dir.display(),
+                cur = current_exe
+            );
+            match quiet_cmd("powershell")
+                .args(["-NoProfile", "-Command", ps.as_str()])
+                .spawn()
+            {
+                Ok(_) => {
+                    self.log_debug(
+                        "[upgrade] Instalador disparado em background — o aplicativo sera fechado para concluir a atualizacao.",
+                    );
+                }
+                Err(e) => {
+                    self.log_debug(&format!(
+                        "[upgrade] ERRO ao disparar a instalacao: {}",
+                        e
+                    ));
+                }
+            }
+        }
+    }
+
     /// Lê no registro se o autostart (HKCU\...\Run\FzComputerAI) está ativo.
     #[cfg(target_os = "windows")]
     pub fn read_autostart(&mut self) {
@@ -848,8 +1595,22 @@ fn setup_fazai_theme(ctx: &egui::Context) {
 }
 
 impl eframe::App for FzComputerApp {
+    // Fechar a GUI = desligar o sistema por inteiro: para o daemon
+    // cua-driver e remove as regras portproxy LAN -> localhost (inclusive
+    // orfas de testes antigos). Ver AppState::shutdown_cleanup.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.state.shutdown_cleanup();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         setup_fazai_theme(ctx);
+
+        // Observa o download do upgrade em background (throttle interno de 1s).
+        self.state.poll_update_download();
+        if self.state.update_downloading {
+            // Garante novos frames mesmo sem input, para o poll acontecer.
+            ctx.request_repaint_after(std::time::Duration::from_millis(1000));
+        }
 
         // Header Principal
         egui::TopBottomPanel::top("top_panel")
@@ -910,25 +1671,27 @@ impl eframe::App for FzComputerApp {
                         ui.add_space(10.0);
                         // Mesmo critério do status da aba MCP & Rede:
                         // verde só com LAN confirmada pelo netstat + TCP.
+                        // Ponto DESENHADO (status_dot) — a fonte padrao nao
+                        // tem o glifo "●" e renderizava uma caixa quebrada.
                         let (status_txt, status_color) = match self.state.port_status {
                             crate::app::PortStatus::LanListening => (
                                 match self.state.language {
-                                    Language::PtBr => format!("● MCP HTTP Ativo (local + LAN) (:{})", self.state.http_port),
-                                    Language::English => format!("● MCP HTTP Active (local + LAN) (:{})", self.state.http_port),
+                                    Language::PtBr => format!("MCP HTTP Ativo (local + LAN) (:{})", self.state.http_port),
+                                    Language::English => format!("MCP HTTP Active (local + LAN) (:{})", self.state.http_port),
                                 },
                                 Color32::from_rgb(76, 175, 80),
                             ),
                             crate::app::PortStatus::LocalOnly => (
                                 match self.state.language {
-                                    Language::PtBr => format!("● MCP HTTP Local apenas (:{})", self.state.http_port),
-                                    Language::English => format!("● MCP HTTP Local only (:{})", self.state.http_port),
+                                    Language::PtBr => format!("MCP HTTP Local apenas (:{})", self.state.http_port),
+                                    Language::English => format!("MCP HTTP Local only (:{})", self.state.http_port),
                                 },
                                 Color32::from_rgb(255, 193, 7),
                             ),
                             crate::app::PortStatus::Stopped => (
                                 match self.state.language {
-                                    Language::PtBr => "● MCP HTTP Parado".to_string(),
-                                    Language::English => "● MCP HTTP Stopped".to_string(),
+                                    Language::PtBr => "MCP HTTP Parado".to_string(),
+                                    Language::English => "MCP HTTP Stopped".to_string(),
                                 },
                                 Color32::from_rgb(239, 83, 80),
                             ),
@@ -939,6 +1702,7 @@ impl eframe::App for FzComputerApp {
                                 .strong()
                                 .size(13.0)
                         );
+                        crate::app::status_dot(ui, status_color);
                     });
                 });
             });
@@ -948,14 +1712,19 @@ impl eframe::App for FzComputerApp {
             .frame(egui::Frame::none().inner_margin(10.0).fill(Color32::from_rgb(20, 20, 20)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(match self.state.language {
-                            Language::PtBr => "O FzComputerAI integra ferramentas CLI e MCP para Visão e Automação de UI.",
-                            Language::English => "FzComputerAI integrates CLI and MCP tooling for Vision and UI Automation.",
-                        })
-                        .size(12.0)
-                        .color(Color32::from_rgb(150, 150, 150))
-                    );
+                    // Adaptativo: em janela estreita o texto da esquerda
+                    // colidia com o bloco Donate/empresa da direita — some
+                    // quando nao ha largura para os dois.
+                    if ui.available_width() > 920.0 {
+                        ui.label(
+                            egui::RichText::new(match self.state.language {
+                                Language::PtBr => "O FzComputerAI integra ferramentas CLI e MCP para Visão e Automação de UI.",
+                                Language::English => "FzComputerAI integrates CLI and MCP tooling for Vision and UI Automation.",
+                            })
+                            .size(12.0)
+                            .color(Color32::from_rgb(150, 150, 150))
+                        );
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new("Grupo FazAI | Webstorage Tecnologia")
@@ -981,8 +1750,14 @@ impl eframe::App for FzComputerApp {
             .frame(egui::Frame::none().inner_margin(16.0).fill(Color32::from_rgb(30, 30, 30)))
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.add_space((ui.available_width() - 780.0).max(0.0) / 2.0);
+                    // Barra de abas ADAPTATIVA: nada de largura fixa de 940px.
+                    // Em janela larga a fileira fica centralizada (add_space
+                    // calculado sobre a largura real); em janela estreita o
+                    // horizontal_wrapped quebra em duas fileiras em vez de
+                    // estourar/cortar botões.
+                    ui.horizontal_wrapped(|ui| {
+                        const TAB_W: f32 = 150.0;
+                        const TAB_SPACING: f32 = 4.0;
 
                         let tabs = [
                             (Tab::Network, match self.state.language {
@@ -1005,7 +1780,17 @@ impl eframe::App for FzComputerApp {
                                 Language::PtBr => "Doctor & Skills",
                                 Language::English => "Doctor & Skills",
                             }),
+                            (Tab::McpTools, match self.state.language {
+                                Language::PtBr => "MCP Tools",
+                                Language::English => "MCP Tools",
+                            }),
                         ];
+
+                        // Centraliza SOMENTE quando a fileira inteira cabe;
+                        // quando não cabe, o espaço vira 0 e o wrapped quebra.
+                        let n = tabs.len() as f32;
+                        let row_w = n * TAB_W + (n - 1.0) * TAB_SPACING;
+                        ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
 
                         for (tab, label) in tabs {
                             let is_selected = self.state.active_tab == tab;
@@ -1022,13 +1807,13 @@ impl eframe::App for FzComputerApp {
                                     .strong()
                             )
                             .fill(bg_color)
-                            .min_size(Vec2::new(150.0, 32.0))
+                            .min_size(Vec2::new(TAB_W, 32.0))
                             .rounding(egui::Rounding::same(8.0));
 
                             if ui.add(btn).clicked() {
                                 self.state.active_tab = tab;
                             }
-                            ui.add_space(4.0);
+                            ui.add_space(TAB_SPACING);
                         }
                     });
                 });
@@ -1041,6 +1826,7 @@ impl eframe::App for FzComputerApp {
                     Tab::Windows => crate::tabs::windows::render(ui, &mut self.state),
                     Tab::Recording => crate::tabs::recording::render(ui, &mut self.state),
                     Tab::DoctorSkills => crate::tabs::doctor_skills::render(ui, &mut self.state),
+                    Tab::McpTools => crate::tabs::mcp_tools::render(ui, &mut self.state),
                 }
             });
 
@@ -1095,6 +1881,122 @@ impl eframe::App for FzComputerApp {
 
             if !open || close_clicked {
                 self.state.show_about = false;
+            }
+        }
+
+        // ─── Dialogo 1 do upgrade: nova versao encontrada — baixar? ───
+        if self.state.update_available.is_some()
+            && !self.state.update_downloading
+            && !self.state.update_ready
+        {
+            let lang = self.state.language;
+            let tag = self.state.update_available.clone().unwrap_or_default();
+            let mut do_download = false;
+            let mut do_dismiss = false;
+
+            egui::Window::new(match lang {
+                Language::PtBr => "Atualização disponível",
+                Language::English => "Update available",
+            })
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.screen_rect().center())
+            .show(ctx, |ui| {
+                ui.label(match lang {
+                    Language::PtBr => format!(
+                        "Nova versão {} disponível (atual: v{}).\nBaixar o instalador em segundo plano?\nVocê poderá continuar usando o aplicativo durante o download.",
+                        tag,
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                    Language::English => format!(
+                        "New version {} available (current: v{}).\nDownload the installer in the background?\nYou can keep using the app while it downloads.",
+                        tag,
+                        env!("CARGO_PKG_VERSION")
+                    ),
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(match lang {
+                            Language::PtBr => "Baixar agora",
+                            Language::English => "Download now",
+                        })
+                        .clicked()
+                    {
+                        do_download = true;
+                    }
+                    if ui
+                        .button(match lang {
+                            Language::PtBr => "Depois",
+                            Language::English => "Later",
+                        })
+                        .clicked()
+                    {
+                        do_dismiss = true;
+                    }
+                });
+            });
+
+            if do_download {
+                self.state.start_update_download();
+            }
+            if do_dismiss {
+                self.state.update_available = None;
+            }
+        }
+
+        // ─── Dialogo 2 do upgrade: download pronto — fechar e instalar? ───
+        if self.state.update_ready {
+            let lang = self.state.language;
+            let mut do_install = false;
+            let mut do_dismiss = false;
+
+            egui::Window::new(match lang {
+                Language::PtBr => "Pronto para atualizar",
+                Language::English => "Ready to update",
+            })
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.screen_rect().center())
+            .show(ctx, |ui| {
+                ui.label(match lang {
+                    Language::PtBr => "Download concluído em diretório temporário.\nPara instalar, o FzComputerAI precisa ser FECHADO.\nApós a instalação, o aplicativo e o motor cua-driver serão reabertos automaticamente.",
+                    Language::English => "Download finished in a temporary directory.\nTo install, FzComputerAI must be CLOSED.\nAfter installation, the app and the cua-driver engine will be reopened automatically.",
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(match lang {
+                            Language::PtBr => "Fechar e instalar agora",
+                            Language::English => "Close and install now",
+                        })
+                        .clicked()
+                    {
+                        do_install = true;
+                    }
+                    if ui
+                        .button(match lang {
+                            Language::PtBr => "Depois",
+                            Language::English => "Later",
+                        })
+                        .clicked()
+                    {
+                        do_dismiss = true;
+                    }
+                });
+            });
+
+            if do_install {
+                self.state.install_update_and_restart();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            if do_dismiss {
+                self.state.update_ready = false;
+                self.state.update_available = None;
             }
         }
     }

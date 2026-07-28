@@ -1,6 +1,6 @@
 {
   "name": "fzcomputerai",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "description": "FzComputerAI — Servidor Nativo de Visão Computacional Multimodal & Automação Desktop para Agentes de IA via MCP & GUI Rust",
   "main": "bin/cli.js",
   "bin": {
@@ -11,7 +11,7 @@
     "start": "node bin/cli.js",
     "mcp": "node bin/cli.js mcp",
     "doctor": "node bin/cli.js doctor",
-    "install-native": "powershell -ExecutionPolicy Bypass -File ./install.ps1"
+    "install-native": "bash ./install.sh"
   },
   "repository": {
     "type": "git",
