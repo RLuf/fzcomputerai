@@ -431,9 +431,11 @@ english.PrevConfirm=Confirm uninstalling the previous version at:%n%n    %1%n%nT
 brazilianportuguese.StatusEngineProbe=Verificando o motor cua-driver...
 brazilianportuguese.StatusEngineInstall=Instalando a ultima versao estavel do motor cua-driver pelo instalador oficial do projeto Cua...
 brazilianportuguese.StatusEngineVerify=Conferindo o motor cua-driver recem instalado...
+brazilianportuguese.StatusSkills=Instalando o pacote de skills nos agentes detectados (Claude Code, Antigravity, Codex...)...
 english.StatusEngineProbe=Checking the cua-driver engine...
 english.StatusEngineInstall=Installing the latest stable cua-driver engine through the official Cua project installer...
 english.StatusEngineVerify=Verifying the freshly installed cua-driver engine...
+english.StatusSkills=Installing the skill pack into detected agents (Claude Code, Antigravity, Codex...)...
 
 ; --- Resultado do passo do motor ---
 brazilianportuguese.EngineOk=Motor cua-driver: OK (versao %1).
@@ -1489,7 +1491,7 @@ end;
 procedure InstallEngineStep;
 var
   PSExe, ScriptPath, Params, FailHelp: String;
-  TargetRel, AutoFlag, EmbPS, LockFix: String;
+  TargetRel, AutoFlag, EmbPS, LockFix, SkillsOut: String;
   RC: Integer;
   ShowMode: Integer;
   DoInstall: Boolean;
@@ -1636,6 +1638,27 @@ begin
         'pelo PATH nem pelo caminho canonico do instalador oficial. A interface ' +
         'vai abrir, mas nenhuma acao vai funcionar.');
 
+  // --- PACOTE DE SKILLS: instalado AQUI, nao deixado a cargo do usuario ------
+  // Sem o skill pack linkado, o agente (Claude Code, Antigravity, Codex,
+  // Hermes...) conecta no MCP e NAO enxerga as ferramentas — o produto parece
+  // quebrado. A GUI ja tinha o botao "Instalar Skills nos Agentes" na aba
+  // Doctor & Skills, mas quem acabou de instalar NAO SABE que precisa clicar
+  // ali. Entao o setup faz isso: `skills install` e idempotente e, pelo help
+  // oficial do motor, "Never overwrites existing user links".
+  // NAO-FATAL: falha aqui nao derruba a instalacao; o botao da GUI continua
+  // sendo o caminho manual.
+  if EngineStepOk then
+  begin
+    SetStatus(CustomMessage('StatusSkills'));
+    RC := RunAndCapture(EngineCmd + ' skills install', SkillsOut);
+    if RC = 0 then
+      Log('[skills] pacote de skills instalado/linkado nos agentes detectados.')
+    else
+      Log('[skills] AVISO: "skills install" retornou exit=' + IntToStr(RC) +
+          '. As ferramentas podem nao aparecer no agente ate rodar o botao ' +
+          '"Instalar Skills nos Agentes" na aba Doctor & Skills.');
+  end;
+
   Log('[engine] ===== PASSO DO MOTOR cua-driver: FIM (ok=' + YesNo(EngineStepOk) + ') =====');
 
   // Mensagem clara para o usuario SOMENTE em modo interativo. Em silencioso o
@@ -1748,7 +1771,14 @@ begin
     else
       Log('[daemon] modo silencioso: Scheduled Task do daemon PRESERVADA ' +
           '(recria-la exigiria admin/UAC, impossivel numa instalacao desassistida).');
-    Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM cua-driver.exe /IM fzcomputerai.exe >nul 2>&1', '',
+    // Encerramento LIMPO do motor: `cua-driver stop` (o comando OFICIAL da
+    // CLI) ja foi executado acima. NAO usamos mais
+    // "taskkill /F /IM cua-driver.exe": aquilo matava TODO processo com esse
+    // nome na maquina — inclusive um motor de outro uso do usuario — e e a
+    // mesma pratica que o AGENTS.md proibe para os binarios de tunel.
+    // O fzcomputerai.exe continua sendo encerrado por IMAGENAME porque e o
+    // NOSSO produto, e o Inno precisa poder sobrescrever o arquivo.
+    Exec(ExpandConstant('{cmd}'), '/C taskkill /F /IM fzcomputerai.exe >nul 2>&1', '',
          SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec(ExpandConstant('{cmd}'), '/C reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v cua-driver-serve /f >nul 2>&1', '',
          SW_HIDE, ewWaitUntilTerminated, ResultCode);

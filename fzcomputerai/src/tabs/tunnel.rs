@@ -78,16 +78,42 @@ fn render_top(ui: &mut Ui, state: &mut AppState) {
             // Bearer. Afirmar "nao tem autenticacao" para quem roda o motor novo
             // seria mentira — e mentira no aviso de seguranca e pior que silencio.
             let has_token = !state.mcp_token.trim().is_empty();
+            // Sem token, o texto depende da GERAÇÃO DO MOTOR — e essa distinção
+            // não é detalhe: dizer "o endpoint aceita qualquer requisição" para
+            // quem roda um motor 0.16+ é FALSO. MEDIDO no 0.17.0: sem
+            // CUA_DRIVER_RS_MCP_HTTP_TOKEN o `serve` sai com erro
+            // ("must be set to a host-generated bearer token") e NENHUMA porta
+            // abre — não existe endpoint para expor. Inventar risco num aviso de
+            // segurança gasta a confiança do usuário exatamente onde ela é
+            // necessária.
+            let engine_requires_token = {
+                let v = state.driver_version.trim();
+                match v.split('.').next().and_then(|s| s.parse::<u32>().ok()) {
+                    Some(major) if major >= 1 => true,
+                    Some(0) => v
+                        .split('.')
+                        .nth(1)
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .map(|minor| minor >= 16)
+                        .unwrap_or(false),
+                    _ => false, // versão desconhecida: não afirma nada
+                }
+            };
             ui.label(
                 RichText::new(if has_token {
                     match state.language {
                         Language::PtBr => "Há token configurado no motor (CUA_DRIVER_RS_MCP_HTTP_TOKEN): o endpoint exige 'Authorization: Bearer <token>' e responde 401 sem ele. Quem tiver a URL E o token controla esta máquina — trate o token como senha. URL aleatória NÃO é proteção.",
                         Language::English => "A token is configured in the engine (CUA_DRIVER_RS_MCP_HTTP_TOKEN): the endpoint requires 'Authorization: Bearer <token>' and answers 401 without it. Anyone with the URL AND the token controls this machine — treat the token as a password. A random URL is NOT protection.",
                     }
+                } else if engine_requires_token {
+                    match state.language {
+                        Language::PtBr => "Sem token configurado: ESTE motor exige CUA_DRIVER_RS_MCP_HTTP_TOKEN e nem inicia o endpoint HTTP sem ele — não há porta aberta, logo não há o que expor pelo túnel. Para publicar, configure o token; ele passa a ser a senha de acesso.",
+                        Language::English => "No token configured: THIS engine requires CUA_DRIVER_RS_MCP_HTTP_TOKEN and will not even start the HTTP endpoint without it — no port is open, so there is nothing to expose through the tunnel. To publish, configure the token; it becomes the access password.",
+                    }
                 } else {
                     match state.language {
-                        Language::PtBr => "Sem token configurado: neste motor o endpoint aceita qualquer requisição, então quem tiver a URL pública controla mouse, teclado e tela desta máquina. Use senha na URL (abaixo) ou a autenticação do provedor. Motores 0.16+ exigem token — confira a versão na Central de Atualizações. URL aleatória NÃO é proteção.",
-                        Language::English => "No token configured: on this engine the endpoint accepts any request, so anyone with the public URL controls this machine's mouse, keyboard and screen. Use a URL password (below) or the provider's authentication. Engines 0.16+ require a token — check the version in the Update Center. A random URL is NOT protection.",
+                        Language::PtBr => "Sem token configurado: se este motor for de uma série antiga (0.8.x), o endpoint aceita qualquer requisição e quem tiver a URL pública controla mouse, teclado e tela desta máquina. Use senha na URL (abaixo) ou a autenticação do provedor. URL aleatória NÃO é proteção.",
+                        Language::English => "No token configured: if this engine is from an older series (0.8.x), the endpoint accepts any request and anyone with the public URL controls this machine's mouse, keyboard and screen. Use a URL password (below) or the provider's authentication. A random URL is NOT protection.",
                     }
                 })
                 .size(11.0)

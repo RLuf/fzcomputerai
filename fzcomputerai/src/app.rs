@@ -175,6 +175,13 @@ pub struct AppState {
     pub engine_log_pos: u64,
     pub engine_log_poll: Option<std::time::Instant>,
 
+    // ─── Encaminhamento LAN feito PELO APP (substitui netsh portproxy) ───
+    // Thread de forward TCP: escuta em <ip_lan>:porta e copia para
+    // 127.0.0.1:porta. É filho do processo — morre junto com o app, não pede
+    // admin e não deixa regra no sistema.
+    pub lan_forward_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub lan_forward_addr: Option<(String, u16)>,
+
     // Iniciar com o Windows (HKCU\...\Run)
     pub autostart_enabled: bool,
 
@@ -319,6 +326,8 @@ impl Default for AppState {
             console_jump: false,
             engine_log_pos: 0,
             engine_log_poll: None,
+            lan_forward_stop: None,
+            lan_forward_addr: None,
             autostart_enabled: false,
             portable_mode: false, // definido de verdade no startup
             minimize_to_tray: false,
@@ -1122,6 +1131,25 @@ impl AppState {
                 }
             };
 
+            // CAMINHO NOVO — encaminhamento DENTRO do app (thread), no lugar do
+            // netsh portproxy. Sem admin, sem regra que sobrevive ao app, e o
+            // que escuta na LAN é este processo: quando ele fecha, a porta
+            // fecha junto. É TCP puro, então curl, telnet e nc atravessam igual.
+            // O netsh continua abaixo apenas como FALLBACK, para o caso de o
+            // bind no IP da LAN falhar.
+            if self.start_lan_forward(&ip, listen_port_num) {
+                self.portproxy_active = true;
+                self.status_msg = self.tr(
+                    "Encaminhamento LAN ativo (pelo proprio app, sem netsh/admin).",
+                    "LAN forwarding active (by the app itself, no netsh/admin).",
+                );
+                self.check_port_status();
+                return;
+            }
+            self.log_debug(
+                "[lan] Nao consegui escutar no IP da LAN; caindo para o netsh portproxy (regra do sistema, exige admin).",
+            );
+
             // Destino da regra: a porta CUA CONFIGURADA e CONFIRMADA por teste
             // TCP real — nunca a porta "sugerida" sem confirmacao. Sem porta
             // confirmada nao se cria regra nenhuma (encaminhar para porta
@@ -1357,53 +1385,75 @@ impl AppState {
             let _ = child.kill();
         }
         self.stop_gate();
+        // O encaminhamento LAN é uma thread deste processo: fechar o app já o
+        // encerra. Nada a remover do sistema neste caminho.
+        self.stop_lan_forward();
+
+        // ===================================================================
+        // LIMPEZA NATIVA — NUNCA VOLTE A FAZER ISTO COM POWERSHELL OCULTO
+        // -------------------------------------------------------------------
+        // A versão anterior disparava um `powershell -WindowStyle Hidden` de
+        // ~2 KB que esperava este processo morrer, matava processos, mexia no
+        // registro, rodava netsh e ainda chamava `-Verb RunAs`. O Microsoft
+        // Defender FLAGROU exatamente essa linha de comando nesta máquina
+        // (detecção 2147941383, 2026-08-03 19:19), e com razão: é o retrato
+        // do que heurística de malware procura — script oculto + kill +
+        // persistência + elevação.
+        // Agora tudo é feito aqui, com chamadas diretas e curtas (cada uma
+        // via quiet_cmd → CREATE_NO_WINDOW, sem console piscando):
+        //   1. `cua-driver stop` — o comando OFICIAL da CLI, não kill;
+        //   2. regras portproxy criadas por NÓS (registradas em
+        //      HKCU\Software\FzComputerAI) removidas por netsh, uma a uma;
+        //   3. os valores correspondentes apagados do registro por reg.exe.
+        // Nada é elevado: se o netsh precisar de admin e falhar, o valor fica
+        // no registro e a reconciliação da próxima abertura tenta de novo —
+        // melhor deixar rastro do que abrir UAC no fechamento (o que já
+        // travou o app fechando no passado).
+        // ===================================================================
         #[cfg(target_os = "windows")]
         {
-            let my_pid = std::process::id();
-            let ps = format!(
-                "$ErrorActionPreference='SilentlyContinue'; \
-                 $deadline=(Get-Date).AddSeconds(20); \
-                 while ((Get-Process -Id {pid} -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {{ Start-Sleep -Milliseconds 300 }}; \
-                 Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue; \
-                 cua-driver stop | Out-Null; \
-                 taskkill /F /IM cua-driver.exe | Out-Null; \
-                 $key='HKCU:\\Software\\FzComputerAI'; \
-                 $props = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue); \
-                 if (-not $props) {{ exit 0 }}; \
-                 $tuns = @($props.PSObject.Properties | Where-Object {{ $_.Name -like 'tunnel:*' }}); \
-                 foreach ($tv in $tuns) {{ \
-                   $tp = ($tv.Name -split ':')[-1]; \
-                   $parts = $tv.Value -split '\\|'; \
-                   $tpr = Get-CimInstance Win32_Process -Filter \"ProcessId=$tp\"; \
-                   if ($tpr -and $tpr.Name -eq $parts[0] -and ($parts[1] -eq '' -or $tpr.CreationDate.ToString('yyyyMMddHHmmss') -eq $parts[1]) -and $parts[3] -and $tpr.CommandLine -like ('*' + $parts[3] + '*')) {{ Stop-Process -Id $tp -Force }}; \
-                   Remove-ItemProperty -Path $key -Name $tv.Name -Force -ErrorAction SilentlyContinue \
-                 }}; \
-                 $rules = @($props.PSObject.Properties | Where-Object {{ $_.Name -like 'portproxy:*' }} | ForEach-Object {{ $_.Name.Substring(10) }}); \
-                 if ($rules.Count -eq 0) {{ exit 0 }}; \
-                 $pend=@(); \
-                 foreach ($r in $rules) {{ \
-                   $i=$r.LastIndexOf(':'); $addr=$r.Substring(0,$i); $prt=$r.Substring($i+1); \
-                   netsh interface portproxy delete v4tov4 listenport=$prt listenaddress=$addr | Out-Null; \
-                   $left = (netsh interface portproxy show v4tov4 | Select-String (\"^\\s*\" + [regex]::Escape($addr) + \"\\s+\" + $prt + \"\\s\")); \
-                   if ($left) {{ $pend += \"netsh interface portproxy delete v4tov4 listenport=$prt listenaddress=$addr\" }} \
-                   else {{ Remove-ItemProperty -Path $key -Name (\"portproxy:\" + $r) -Force -ErrorAction SilentlyContinue }} \
-                 }}; \
-                 if ($pend.Count -gt 0) {{ \
-                   Start-Process -FilePath powershell -ArgumentList ('-NoProfile -WindowStyle Hidden -Command \"' + ($pend -join '; ') + '\"') -Verb RunAs -Wait; \
-                   foreach ($r in $rules) {{ \
-                     $i=$r.LastIndexOf(':'); $addr=$r.Substring(0,$i); $prt=$r.Substring($i+1); \
-                     $left = (netsh interface portproxy show v4tov4 | Select-String (\"^\\s*\" + [regex]::Escape($addr) + \"\\s+\" + $prt + \"\\s\")); \
-                     if (-not $left) {{ Remove-ItemProperty -Path $key -Name (\"portproxy:\" + $r) -Force -ErrorAction SilentlyContinue }} \
-                   }} \
-                 }}",
-                pid = my_pid
-            );
+            let exe = Self::engine_exe();
+            let _ = quiet_cmd(&exe).arg("stop").output();
 
-            // spawn(), NUNCA output()/wait(): o auxiliar vive por conta
-            // propria e o processo da GUI pode terminar imediatamente.
-            let _ = quiet_cmd("powershell")
-                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps.as_str()])
-                .spawn();
+            // Regras portproxy nossas: HKCU\Software\FzComputerAI, valores
+            // "portproxy:<ip>:<porta>". Só as NOSSAS — nunca por semelhança.
+            if let Ok(out) = quiet_cmd("reg")
+                .args(["query", "HKCU\\Software\\FzComputerAI"])
+                .output()
+            {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                for line in text.lines() {
+                    let line = line.trim();
+                    if !line.starts_with("portproxy:") {
+                        continue;
+                    }
+                    // "portproxy:<ip>:<porta>    REG_SZ    <dado>"
+                    let name = line.split_whitespace().next().unwrap_or("").to_string();
+                    let rule = name.trim_start_matches("portproxy:");
+                    if let Some(idx) = rule.rfind(':') {
+                        let (addr, port) = (&rule[..idx], &rule[idx + 1..]);
+                        let _ = quiet_cmd("netsh")
+                            .args([
+                                "interface",
+                                "portproxy",
+                                "delete",
+                                "v4tov4",
+                                &format!("listenport={}", port),
+                                &format!("listenaddress={}", addr),
+                            ])
+                            .output();
+                    }
+                    let _ = quiet_cmd("reg")
+                        .args([
+                            "delete",
+                            "HKCU\\Software\\FzComputerAI",
+                            "/v",
+                            &name,
+                            "/f",
+                        ])
+                        .output();
+                }
+            }
         }
     }
 
@@ -1411,6 +1461,18 @@ impl AppState {
     /// apply_portproxy: tentativa direta, fallback elevado via UAC oficial e
     /// confirmação relendo `show v4tov4` — o estado exibido nunca é presumido.
     pub fn remove_portproxy(&mut self) {
+        // Se o encaminhamento é nosso (thread no app), basta derrubá-lo — não
+        // há regra de sistema para apagar nem admin a pedir.
+        if self.lan_forward_addr.is_some() {
+            self.stop_lan_forward();
+            self.portproxy_active = false;
+            self.status_msg = self.tr(
+                "Encaminhamento LAN encerrado.",
+                "LAN forwarding stopped.",
+            );
+            self.check_port_status();
+            return;
+        }
         #[cfg(target_os = "windows")]
         {
             let listen_port = self.http_port.trim().to_string();
@@ -1668,14 +1730,44 @@ impl AppState {
         {
             let port = Self::read_user_env("CUA_DRIVER_RS_MCP_HTTP_PORT")
                 .unwrap_or_else(|| "8000".to_string());
-            let token = Self::read_user_env("CUA_DRIVER_RS_MCP_HTTP_TOKEN");
+            // Token: se não existir, a GUI GERA e persiste. O motor 0.16+ chama
+            // o valor de "host-generated bearer token" — o host é esta GUI, e
+            // exigir que o usuário invente e grave uma variável de ambiente à
+            // mão para o produto simplesmente ligar é jogar o problema do
+            // motor no colo de quem só quer usar. Sem isto, no 0.16+, o `serve`
+            // sai com erro e NENHUMA porta abre: o app fica "PARADO" para sempre.
+            let token = match Self::read_user_env("CUA_DRIVER_RS_MCP_HTTP_TOKEN") {
+                Some(t) if !t.trim().is_empty() => Some(t),
+                _ => self.generate_and_store_mcp_token(),
+            };
             let exe = Self::engine_exe();
 
             // Só pode existir UM daemon (o segundo `serve` recusa com
             // "already running"): derruba o que estiver de pé — inclusive um
             // subido pela task, sem HTTP — antes de assumir o processo.
             let _ = self.run_logged(&exe, &["stop"]);
-            std::thread::sleep(std::time::Duration::from_millis(800));
+
+            // Espera o PROCESSO do motor anterior morrer — NUNCA testar a porta
+            // com um bind próprio antes de lançar. MEDIDO nesta máquina: um
+            // `TcpListener::bind` de "verificação", mesmo soltando o listener
+            // em seguida, faz o motor lançado logo depois falhar com
+            // "MCP HTTP transport disabled — bind 127.0.0.1:8000 failed
+            // (os error 10048)" e virar daemon ZUMBI (pipe vivo, porta muda).
+            // Sem esse teste, ele sobe com HTTP normalmente. Verificar o
+            // processo é não-intrusivo e resolve o mesmo problema.
+            for _ in 0..20 {
+                let still_alive = quiet_cmd("tasklist")
+                    .args(["/FI", "IMAGENAME eq cua-driver.exe", "/NH"])
+                    .output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).contains("cua-driver.exe"))
+                    .unwrap_or(false);
+                if !still_alive {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            // Folga curta para o socket do processo morto ser reciclado pelo SO.
+            std::thread::sleep(std::time::Duration::from_millis(600));
 
             let mut cmd = quiet_cmd(&exe);
             cmd.arg("serve").env("CUA_DRIVER_RS_MCP_HTTP_PORT", &port);
@@ -1759,6 +1851,54 @@ impl AppState {
 
         self.check_port_status();
         self.daemon_running = self.port_active;
+    }
+
+    /// Gera um bearer token e o persiste em `HKCU\Environment`, devolvendo-o.
+    ///
+    /// O motor 0.16+ recusa iniciar o endpoint HTTP sem
+    /// `CUA_DRIVER_RS_MCP_HTTP_TOKEN` — ele o chama de *host-generated bearer
+    /// token*, ou seja, quem hospeda é que decide o valor. Este app é o
+    /// hospedeiro: gerar aqui é o que faz o produto funcionar na primeira
+    /// execução, sem o usuário precisar saber que a variável existe.
+    ///
+    /// Aleatoriedade vem do `RNGCryptoServiceProvider` do Windows (via
+    /// PowerShell, sem dependência nova): 32 bytes → 64 chars hex.
+    /// Persistido com `setx` para a Scheduled Task do logon também enxergar.
+    #[cfg(target_os = "windows")]
+    fn generate_and_store_mcp_token(&mut self) -> Option<String> {
+        let ps = "$b=New-Object byte[] 32; \
+                  [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); \
+                  ($b | ForEach-Object { $_.ToString('x2') }) -join ''";
+        let out = quiet_cmd("powershell")
+            .args(["-NoProfile", "-Command", ps])
+            .output()
+            .ok()?;
+        let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if token.len() < 32 {
+            self.log_debug(
+                "[daemon] ERRO: nao consegui gerar o token do endpoint MCP (saida vazia do gerador).",
+            );
+            return None;
+        }
+        // setx persiste em HKCU\Environment (limite de 1024 chars — 64 cabe).
+        let ok = quiet_cmd("setx")
+            .args(["CUA_DRIVER_RS_MCP_HTTP_TOKEN", &token])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            self.mcp_token = token.clone();
+            self.log_debug(
+                "[daemon] Token do endpoint MCP GERADO e gravado em HKCU\\Environment (o motor 0.16+ recusa iniciar sem ele). O valor nao e exibido nem registrado em log — trate-o como senha; leia com: reg query HKCU\\Environment /v CUA_DRIVER_RS_MCP_HTTP_TOKEN",
+            );
+            Some(token)
+        } else {
+            self.log_debug(
+                "[daemon] AVISO: token gerado mas NAO persistido (setx falhou). Ele vale so para este daemon; no proximo logon o autostart subira sem token.",
+            );
+            self.mcp_token = token.clone();
+            Some(token)
+        }
     }
 
     /// Arquivo onde o daemon do motor escreve stdout+stderr. Fica ao lado dos
@@ -3107,6 +3247,95 @@ impl AppState {
             gate_port, mcp_port
         ));
         Some(gate_port)
+    }
+
+    /// Encaminhamento LAN **dentro do próprio app** — substitui o
+    /// `netsh interface portproxy`.
+    ///
+    /// POR QUE ISTO EXISTE (não volte para o netsh): o portproxy é uma regra
+    /// ESTÁTICA do serviço IP Helper. Ela (a) exige admin/UAC para criar e
+    /// remover, (b) continua "LISTENING" na LAN mesmo com o motor morto —
+    /// aceitando conexões que morrem no destino, dando falso positivo de
+    /// serviço no ar — e (c) SOBREVIVE ao fechamento do app e ao reboot, o que
+    /// obrigava uma rotina de limpeza que o Defender flagrou como malware.
+    /// Um forwarder em thread resolve os três: sem elevação, some junto com o
+    /// processo e só escuta enquanto o app está vivo.
+    ///
+    /// Escuta em `<ip_lan>:porta` e copia bytes nos dois sentidos contra
+    /// `127.0.0.1:porta` (onde o motor escuta, com bind fixo no upstream).
+    fn start_lan_forward(&mut self, ip: &str, port: u16) -> bool {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        self.stop_lan_forward();
+
+        let listener = match std::net::TcpListener::bind((ip, port)) {
+            Ok(l) => l,
+            Err(e) => {
+                self.log_debug(&format!(
+                    "[lan] Falha ao escutar em {}:{} — {}. (Porta ocupada? Regra portproxy antiga ainda ativa nesse endereco?)",
+                    ip, port, e
+                ));
+                return false;
+            }
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = stop.clone();
+
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                if stop_thread.load(Ordering::SeqCst) {
+                    break;
+                }
+                match conn {
+                    Ok(client) => {
+                        std::thread::spawn(move || {
+                            // Destino: o motor, sempre em loopback.
+                            let Ok(upstream) = std::net::TcpStream::connect(("127.0.0.1", port))
+                            else {
+                                return;
+                            };
+                            let (Ok(mut c_in), Ok(mut u_out)) =
+                                (client.try_clone(), upstream.try_clone())
+                            else {
+                                return;
+                            };
+                            let mut c_out = client;
+                            let mut u_in = upstream;
+                            // Um sentido em cada thread; ao fechar um lado, a
+                            // cópia do outro termina com EOF/erro e sai.
+                            let t = std::thread::spawn(move || {
+                                let _ = std::io::copy(&mut c_in, &mut u_out);
+                            });
+                            let _ = std::io::copy(&mut u_in, &mut c_out);
+                            let _ = t.join();
+                        });
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        self.lan_forward_stop = Some(stop);
+        self.lan_forward_addr = Some((ip.to_string(), port));
+        self.log_debug(&format!(
+            "[lan] Encaminhamento ATIVO dentro do app: {}:{} -> 127.0.0.1:{}. Sem netsh, sem admin, e some quando o app fecha.",
+            ip, port, port
+        ));
+        true
+    }
+
+    /// Derruba o encaminhamento LAN (destrava o accept com conexão dummy).
+    fn stop_lan_forward(&mut self) {
+        use std::sync::atomic::Ordering;
+        if let Some(stop) = self.lan_forward_stop.take() {
+            stop.store(true, Ordering::SeqCst);
+            if let Some((ip, port)) = self.lan_forward_addr.clone() {
+                let _ = std::net::TcpStream::connect((ip.as_str(), port));
+            }
+            self.log_debug("[lan] Encaminhamento encerrado.");
+        }
+        self.lan_forward_addr = None;
     }
 
     /// Encerra o gate: sinaliza a thread e destrava o accept com uma conexão
