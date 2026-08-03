@@ -1,4 +1,6 @@
-use crate::app::{AppState, Language};
+use crate::app::{
+    term_button, AppState, Language, TERM_BG_PANEL, TERM_GRAY, TERM_GREEN_BRIGHT, ST_OK,
+};
 use egui::{Color32, Frame, Margin, RichText, Rounding, Ui, Vec2};
 
 /// Definição de uma tool MCP exposta pelo CUA Driver.
@@ -115,19 +117,23 @@ const CATEGORIES: &[ToolCategory] = &[
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     // Header com info MCP
     Frame::none()
-        .fill(Color32::from_rgb(24, 32, 42))
-        .rounding(Rounding::same(8.0))
+        .fill(TERM_BG_PANEL)
+        .rounding(Rounding::same(2.0))
         .inner_margin(Margin::same(12.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
+                    // Titulo CURTO: em fonte mono o titulo longo colidia com o
+                    // contador alinhado a direita na mesma linha ("Computer Use
+                    // 38 tools Agent" sobrepostos). O detalhe "CUA Driver /
+                    // Computer Use Agent" ja aparece na Referencia Rapida ao lado.
                     RichText::new(match state.language {
-                        Language::PtBr => "Catálogo de Ferramentas MCP — CUA Driver (Computer Use Agent)",
-                        Language::English => "MCP Tools Catalog — CUA Driver (Computer Use Agent)",
+                        Language::PtBr => "Ferramentas MCP",
+                        Language::English => "MCP Tools",
                     })
                     .size(15.0)
                     .strong()
-                    .color(Color32::WHITE),
+                    .color(TERM_GREEN_BRIGHT),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let total: usize = CATEGORIES.iter().map(|c| c.tools.len()).sum();
@@ -142,7 +148,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             }
                         ))
                         .size(12.0)
-                        .color(Color32::from_rgb(76, 175, 80)),
+                        .color(ST_OK),
                     );
                 });
             });
@@ -153,7 +159,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         Language::PtBr => "Filtro:",
                         Language::English => "Filter:",
                     })
-                    .color(Color32::from_rgb(180, 180, 180)),
+                    .color(TERM_GRAY),
                 );
                 ui.add(
                     egui::TextEdit::singleline(&mut state.mcp_tools_filter)
@@ -173,9 +179,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // não estourar as menores.
     let body_h = ui.available_height();
     let catalog_h = (body_h - 16.0).max(220.0);
-    let output_h = (body_h - 300.0).max(160.0);
 
-    // Layout: Tools à esquerda, Output à direita
+    // Layout: Tools à esquerda, referência à direita
     ui.columns(2, |cols| {
         // Coluna 1: Catálogo de tools por categoria
         egui::ScrollArea::vertical()
@@ -210,8 +215,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     }
 
                     Frame::none()
-                        .fill(Color32::from_rgb(35, 35, 35))
-                        .rounding(Rounding::same(6.0))
+                        .fill(TERM_BG_PANEL)
+                        .rounding(Rounding::same(2.0))
                         .inner_margin(Margin::same(10.0))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -238,24 +243,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                                         Language::English => tool.desc_en,
                                     };
 
-                                    let btn = egui::Button::new(
-                                        RichText::new(tool.name)
-                                            .size(12.0)
-                                            .color(Color32::WHITE)
-                                            .strong(),
-                                    )
-                                    .fill(Color32::from_rgb(50, 50, 50))
-                                    .min_size(Vec2::new(160.0, 24.0))
-                                    .rounding(Rounding::same(4.0));
+                                    let btn = term_button(tool.name)
+                                        .min_size(Vec2::new(160.0, 24.0));
 
                                     if ui.add(btn).clicked() {
                                         tool_clicked = Some(tool.name.to_string());
                                     }
 
                                     ui.label(
-                                        RichText::new(desc)
-                                            .size(11.0)
-                                            .color(Color32::from_rgb(160, 160, 160)),
+                                        RichText::new(desc).size(11.0).color(TERM_GRAY),
                                     );
                                 });
                             }
@@ -282,7 +278,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     if no_param_tools.contains(&name.as_str()) {
                         state.call_mcp_tool(&name, &[]);
                     } else {
-                        state.mcp_tools_output = format!(
+                        state.status_msg = format!(
                             "[{}] {} '{}' {}",
                             name,
                             match state.language {
@@ -299,43 +295,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 }
             });
 
-        // Coluna 2: Output da tool + referência rápida
+        // Coluna 2: referência rápida
         Frame::none()
-            .fill(Color32::from_rgb(38, 38, 38))
-            .rounding(Rounding::same(8.0))
+            .fill(TERM_BG_PANEL)
+            .rounding(Rounding::same(2.0))
             .inner_margin(Margin::same(12.0))
             .show(&mut cols[1], |ui| {
-                ui.label(
-                    RichText::new(match state.language {
-                        Language::PtBr => "Resultado da Tool & Referência MCP",
-                        Language::English => "Tool Output & MCP Reference",
-                    })
-                    .size(14.0)
-                    .strong()
-                    .color(Color32::WHITE),
-                );
-
-                ui.add_space(8.0);
-
-                egui::ScrollArea::vertical()
-                    .id_salt("mcp_tools_output")
-                    .max_height(output_h)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if state.mcp_tools_output.is_empty() {
-                            ui.monospace(match state.language {
-                                Language::PtBr => "Clique em uma tool para testá-la.\nTools sem parâmetros são executadas diretamente.",
-                                Language::English => "Click a tool to test it.\nParameterless tools run directly.",
-                            });
-                        } else {
-                            ui.monospace(&state.mcp_tools_output);
-                        }
-                    });
-
-                ui.add_space(12.0);
-                ui.separator();
-                ui.add_space(8.0);
-
                 ui.label(
                     RichText::new(match state.language {
                         Language::PtBr => "Referência Rápida — Workflow CUA",
@@ -343,14 +308,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     })
                     .size(13.0)
                     .strong()
-                    .color(Color32::from_rgb(33, 150, 243)),
+                    .color(TERM_GREEN_BRIGHT),
                 );
 
                 ui.add_space(6.0);
 
                 ui.monospace(match state.language {
                     Language::PtBr => concat!(
-                        "Ciclo: Olhar → Agir → Verificar\n",
+                        "Ciclo: Olhar -> Agir -> Verificar\n",
                         "\n",
                         "1. screenshot           (captura tela)\n",
                         "2. click 450 280        (age na UI)\n",
@@ -368,7 +333,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         "  cua-driver call click --x 450 --y 280\n",
                     ),
                     Language::English => concat!(
-                        "Cycle: Look → Act → Verify\n",
+                        "Cycle: Look -> Act -> Verify\n",
                         "\n",
                         "1. screenshot           (capture screen)\n",
                         "2. click 450 280        (act on UI)\n",

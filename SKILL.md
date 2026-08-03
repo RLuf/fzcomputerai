@@ -66,7 +66,7 @@ git clone https://github.com/RLuf/fzcomputerai.git
 cd fzcomputerai
 cargo build --release --manifest-path fzcomputerai/Cargo.toml
 # Optional: build the graphical installer (requires Inno Setup / ISCC.exe)
-ISCC.exe /DAppVersion=2.0.0 installer\fzcomputerai.iss
+ISCC.exe /DAppVersion=2.1.0 installer\fzcomputerai.iss
 ```
 
 After installation, the MCP server listens on `http://0.0.0.0:8000/mcp` by
@@ -257,14 +257,30 @@ accessible from any machine on the LAN. For remote access beyond the LAN:
 - **VPN**: Connect remote agents via VPN, then use the Windows LAN IP
 - **PortProxy (netsh)**: The GUI can configure netsh portproxy rules to redirect
   from any IP to localhost if needed
+- **Tunnel (public internet)**: The GUI's **Tunnel** tab exposes the local MCP over
+  a public HTTPS URL via Cloudflare Tunnel, ngrok, or reverse SSH — no inbound
+  firewall/portproxy needed (outbound tunnel). Note: the MCP endpoint has **no
+  authentication of its own**; use the tab's level-1 URL password
+  (`/s/<password>/mcp`) or the provider's own auth (Cloudflare Access, ngrok
+  policy, SSH key). The tunnel is torn down when the app closes.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CUA_DRIVER_RS_MCP_HTTP_PORT` | `8000` | TCP port for the HTTP MCP server |
-| `CUA_DRIVER_RS_MCP_HTTP_BIND` | `0.0.0.0` | Bind address (0.0.0.0 = all interfaces) |
+| `CUA_DRIVER_RS_MCP_HTTP_PORT` | *(unset — HTTP off)* | TCP port for the HTTP MCP server. The listener is only created when this is set. |
+| `CUA_DRIVER_RS_MCP_HTTP_TOKEN` | *(unset)* | Bearer token. **Required by newer engine releases** (0.16+): requests without `Authorization: Bearer <token>` get `401`. Older releases (e.g. 0.8.3) ignore it. |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
+
+> **The listen address is NOT configurable.** The official engine binds **only to
+> `127.0.0.1`** — the address is hardcoded in Cua's `mcp_http.rs`
+> (`([127,0,0,1], port)`), and no bind variable exists upstream. A previous
+> version of this document listed a `CUA_DRIVER_RS_MCP_HTTP_BIND` variable
+> defaulting to `0.0.0.0`; **that was wrong** and has been removed (verified
+> twice: the string does not exist in the installed official binary, and
+> searching the `trycua/cua` repository for it returns zero hits).
+> For LAN access use `netsh portproxy` (MCP & Network tab); for internet access
+> use an outbound tunnel (Tunnel tab).
 
 ### CLI Access
 

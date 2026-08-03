@@ -1,10 +1,10 @@
 [package]
 name = "fzcomputerai"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
-authors = ["Roger Luft <roger@webstorage.com.br>"]
+authors = ["Roger Luft (VeilWalker) <roger@webstorage.com.br>"]
 description = "Interface Gráfica Nativa em Rust para FzComputerAI & CUA Driver MCP"
-license = "CC-BY-4.0"
+license = "MIT"
 # build.rs embute o recurso VERSIONINFO do Windows no .exe (ver o cabecalho
 # do proprio build.rs). Sem isso as Propriedades do arquivo saem em branco.
 build = "build.rs"
@@ -14,6 +14,28 @@ build = "build.rs"
 # build script — a guarda do alvo real fica dentro do build.rs.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+# ---------------------------------------------------------------------------
+# Empacotamento Linux (CI: .deb via cargo-deb, .rpm via cargo-generate-rpm;
+# AppImage e montado direto no workflow com o appimagetool oficial).
+# Decisao do projeto: AppImage + .deb + .rpm — SEM snap, SEM .dmg.
+# Os pacotes instalam SOMENTE o binario da GUI: o motor cua-driver continua
+# sendo instalado pelo instalador oficial do projeto Cua (install.sh).
+# ---------------------------------------------------------------------------
+[package.metadata.deb]
+maintainer = "Roger Luft (VeilWalker) <roger@webstorage.com.br>"
+copyright = "2026, Roger Luft (VeilWalker) - Webstorage Tecnologia"
+extended-description = "Native Rust/egui cockpit for the cua-driver Computer Vision & UI Automation MCP engine (Cua project)."
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/fzcomputerai", "usr/bin/", "755"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/fzcomputerai", dest = "/usr/bin/fzcomputerai", mode = "755" },
+]
 
 [dependencies]
 eframe = { version = "0.29.1", default-features = false, features = ["default_fonts", "glow"] }

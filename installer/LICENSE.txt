@@ -1,92 +1,100 @@
-FzComputerAI — Interface Grafica Nativa para CUA Driver / MCP
-Copyright (c) Roger Luft — Webstorage Tecnologia (https://www.webstorage.com.br)
+FzComputerAI - Interface Grafica Nativa para CUA Driver / MCP
+Copyright (c) 2026 Roger Luft (VeilWalker) - Webstorage Tecnologia
+https://www.webstorage.com.br
 
 ================================================================================
-PORTUGUES (pt-BR)
+MIT LICENSE
 ================================================================================
 
-Este software e distribuido sob a licenca
-Creative Commons Attribution 4.0 International (CC BY 4.0).
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-Voce tem liberdade para:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-  * Compartilhar — copiar e redistribuir o material em qualquer suporte
-    ou formato, para qualquer fim, inclusive comercial.
-  * Adaptar — remixar, transformar e criar a partir do material,
-    para qualquer fim, inclusive comercial.
-
-De acordo com os termos seguintes:
-
-  * Atribuicao — Voce deve dar o credito apropriado a Roger Luft /
-    Webstorage Tecnologia, prover um link para a licenca e indicar se
-    mudancas foram feitas. Voce pode faze-lo de qualquer forma razoavel,
-    mas nao de forma que sugira que o licenciante o apoia ou aprova o
-    seu uso.
-  * Sem restricoes adicionais — Voce nao pode aplicar termos juridicos
-    ou medidas de carater tecnologico que restrinjam legalmente outros
-    de fazerem algo que a licenca permita.
-
-AVISO: Este e um resumo legivel por humanos da licenca (e nao um
-substituto dela). O texto legal completo e vinculante esta disponivel em:
-
-    https://creativecommons.org/licenses/by/4.0/legalcode.pt
-
-Resumo oficial: https://creativecommons.org/licenses/by/4.0/deed.pt-BR
-
-ISENCAO DE GARANTIA: O software e fornecido "COMO ESTA", sem garantias de
-qualquer especie, expressas ou implicitas, incluindo, mas nao se limitando
-as garantias de comercializacao, adequacao a uma finalidade especifica e
-nao violacao.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 --------------------------------------------------------------------------------
-COMPONENTES DE TERCEIROS
+PORTUGUES (pt-BR) - resumo nao vinculante
 --------------------------------------------------------------------------------
 
-O motor de automacao "cua-driver" (projeto trycua/cua) NAO faz parte deste
-pacote e possui licenca, ciclo de vida e instalador proprios. Sua instalacao
-e opcional e feita pelo instalador oficial do proprio projeto:
+Este software e distribuido sob a Licenca MIT. Voce pode usar, copiar,
+modificar, mesclar, publicar, distribuir, sublicenciar e/ou vender copias do
+software, para qualquer fim, inclusive comercial, com uma unica condicao: o
+aviso de copyright acima e o texto da licenca devem ser incluidos em todas as
+copias ou porcoes substanciais do software.
+
+O software e fornecido "COMO ESTA", sem garantias de qualquer especie.
+
+O texto em ingles acima e o unico juridicamente vinculante.
+
+================================================================================
+COMPONENTES DE TERCEIROS / THIRD-PARTY COMPONENTS
+================================================================================
+
+MOTOR CUA-DRIVER (projeto Cua - trycua/cua)
+-------------------------------------------
+
+O motor de automacao "cua-driver" e parte do projeto open-source Cua,
+desenvolvido e mantido por Cua AI, Inc. (equipe cua.ai). Ele NAO faz parte
+deste pacote: possui licenca, ciclo de vida e instalador proprios. Sua
+instalacao e opcional e feita pelo instalador oficial do proprio projeto:
 
     https://github.com/trycua/cua
 
 Ao marcar a opcao "Instalar o motor cua-driver" durante a instalacao, o
-instalador oficial do cua sera executado e fara download do binario a partir
-das releases oficiais no GitHub. A desinstalacao do FzComputerAI NAO remove
-o cua-driver — use o desinstalador proprio dele.
+instalador oficial do Cua sera executado e fara download do binario a partir
+das releases oficiais. A desinstalacao do FzComputerAI NAO remove o
+cua-driver - use o desinstalador proprio dele.
 
-================================================================================
-ENGLISH (en)
-================================================================================
+O projeto Cua e licenciado sob a MIT License:
 
-This software is distributed under the
-Creative Commons Attribution 4.0 International License (CC BY 4.0).
+    MIT License
 
-You are free to Share (copy and redistribute the material in any medium or
-format) and Adapt (remix, transform, and build upon the material) for any
-purpose, even commercially, under the following terms:
+    Copyright (c) 2025 Cua AI, Inc.
 
-  * Attribution — You must give appropriate credit to Roger Luft /
-    Webstorage Tecnologia, provide a link to the license, and indicate if
-    changes were made.
-  * No additional restrictions — You may not apply legal terms or
-    technological measures that legally restrict others from doing anything
-    the license permits.
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
 
-This is a human-readable summary of (and not a substitute for) the license.
-The full legal code is available at:
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
 
-    https://creativecommons.org/licenses/by/4.0/legalcode
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
 
-DISCLAIMER: The software is provided "AS IS", without warranty of any kind,
-express or implied.
+AGRADECIMENTO / ACKNOWLEDGEMENT: agradecemos a Cua AI, Inc. e a comunidade do
+projeto Cua. O cua-driver e a base sobre a qual o FzComputerAI foi construido.
 
---------------------------------------------------------------------------------
-THIRD-PARTY COMPONENTS
---------------------------------------------------------------------------------
+FERRAMENTAS DE TUNEL (opcionais, baixadas sob demanda)
+------------------------------------------------------
 
-The "cua-driver" automation engine (trycua/cua project) is NOT part of this
-package and has its own license, lifecycle and installer. Installing it is
-optional and is performed by the project's own official installer:
+cloudflared (Cloudflare, Apache-2.0), ngrok (ngrok Inc., proprietario) e o
+cliente OpenSSH do Windows NAO sao redistribuidos por este pacote. Quando
+usados pela aba Tunel, sao obtidos das fontes oficiais, na maquina do usuario,
+por acao explicita dele, e seguem sujeitos aos termos dos respectivos
+fornecedores.
 
-    https://github.com/trycua/cua
+BIBLIOTECAS RUST
+----------------
 
-Uninstalling FzComputerAI does NOT remove cua-driver — use its own uninstaller.
+A GUI usa egui/eframe (MIT OR Apache-2.0) e outras crates do ecossistema Rust,
+cada uma sob a sua propria licenca.

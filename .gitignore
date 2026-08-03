@@ -6,11 +6,23 @@
 # Saída do Inno Setup (instalador compilado, publicado via GitHub Releases)
 /dist/
 
+# ─── REGRA DE OURO: archived/ ───────────────────────────────────────────
+# Nada e apagado neste projeto. Antes de modificar ou remover qualquer
+# arquivo, uma copia (ou o proprio arquivo) vai para archived/. Esta pasta
+# NUNCA entra no branch — e o lixo/historico local, nao artefato do repo.
+# A regra normativa esta no AGENTS.md (secao 5).
+/archived/
+
 # Temporary, Tarball & Local Configs
 *.tmp
 *.log
 *.tgz
 .mcp.json.tmp
+
+# Crash/replay dumps da JVM (aparecem na raiz quando alguma ferramenta Java
+# quebra) — nunca sao artefato do projeto.
+hs_err_pid*.log
+replay_pid*.log
 
 # IDE / Editor Files
 .vscode/

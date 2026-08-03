@@ -49,9 +49,30 @@ if (Get-Process fzcomputerai -ErrorAction SilentlyContinue) {
 }
 
 # --- 3. Motor cua-driver ----------------------------------------------------
+# Caminho existir NAO prova nada: junction pendurada passa no Test-Path com o
+# motor removido. Teste REAL: executar '--version' e exigir exit 0 com saida.
+$cuaCanonico = Join-Path $env:LOCALAPPDATA 'Programs\Cua\cua-driver\bin\cua-driver.exe'
+$cuaExe = $null
 $cua = Get-Command cua-driver.exe -ErrorAction SilentlyContinue
 if ($cua) {
-    Ok "Motor cua-driver instalado: $($cua.Source)"
+    $cuaExe = $cua.Source
+} elseif (Test-Path $cuaCanonico) {
+    $cuaExe = $cuaCanonico
+}
+if ($cuaExe) {
+    $cuaVer = $null
+    $cuaOk = $false
+    try {
+        $cuaVer = (& $cuaExe --version 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -eq 0 -and $cuaVer) { $cuaOk = $true }
+    } catch {
+        $cuaOk = $false
+    }
+    if ($cuaOk) {
+        Ok "Motor cua-driver instalado e FUNCIONAL: $cuaVer ($cuaExe)"
+    } else {
+        Falha "Motor cua-driver EXISTE em $cuaExe mas NAO executa ('--version' falhou). Provavel junction pendurada ou instalacao incompleta: reinstale pelo instalador oficial (https://cua.ai/driver/install.ps1)."
+    }
 } else {
     Falha "Motor cua-driver NAO encontrado no PATH. Sem ele NENHUMA acao funciona. Use o botao 'Instalar motor cua-driver' da GUI ou rode o instalador de novo com a task do motor marcada."
 }
@@ -91,6 +112,15 @@ if ($listeners) {
 $mcpBody = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify-install","version":"2.0.0"}}}'
 $mcpHeaders = @{ 'Accept' = 'application/json, text/event-stream' }
 
+# Motor 0.16+ exige 'Authorization: Bearer <token>' (verificado no binario
+# 0.17.0 desta maquina: POST sem token = 401 {"code":-32001}, com token = 200;
+# sem token no ambiente o daemon nem sobe). O token vive em HKCU\Environment.
+# Se existir, o teste envia o header — sem isto, um motor perfeitamente
+# saudavel sairia [FALHA] por 401, que e exatamente o tipo de relatorio
+# mentiroso que este script existe para evitar.
+$mcpToken = [Environment]::GetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_TOKEN', 'User')
+if ($mcpToken) { $mcpHeaders['Authorization'] = "Bearer $mcpToken" }
+
 function Test-McpEndpoint([string]$addr, [string]$p, [bool]$obrigatorio) {
     try {
         $resp = Invoke-WebRequest -Uri "http://${addr}:${p}/mcp" -Method Post -Body $mcpBody `
@@ -101,7 +131,16 @@ function Test-McpEndpoint([string]$addr, [string]$p, [bool]$obrigatorio) {
             Falha "HTTP $($resp.StatusCode) em ${addr}:${p} mas SEM corpo JSON-RPC - nao parece MCP."
         }
     } catch {
-        if ($obrigatorio) {
+        $httpCode = $null
+        try { $httpCode = [int]$_.Exception.Response.StatusCode } catch {}
+        if ($httpCode -eq 401) {
+            # 401 = o daemon ESTA de pe e fala JSON-RPC, mas barrou a autenticacao.
+            if ($mcpToken) {
+                Falha "MCP em ${addr}:${p} respondeu 401 MESMO com token configurado - token divergente do que o daemon carregou. Regrave CUA_DRIVER_RS_MCP_HTTP_TOKEN e reinicie o daemon."
+            } else {
+                Falha "MCP em ${addr}:${p} EXIGE token (motor 0.16+): grave CUA_DRIVER_RS_MCP_HTTP_TOKEN (32-4096 chars) em HKCU\Environment e reinicie o daemon."
+            }
+        } elseif ($obrigatorio) {
             Falha "MCP NAO respondeu POST em ${addr}:${p} ($($_.Exception.Message))."
         } else {
             Info "MCP nao acessivel em ${addr}:${p} - fallback em 127.0.0.1 (publique na LAN pela GUI se desejar)."

@@ -3,10 +3,11 @@
 <div align="center">
 
 ![GitHub Release](https://img.shields.io/github/v/release/RLuf/fzcomputerai)
-![CC BY 4.0 License](https://img.shields.io/badge/License-CC%20BY%204.0-blue.svg)
+![MIT License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platforms](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)
 ![MCP Enabled](https://img.shields.io/badge/MCP-Server%20Ready-orange.svg)
 ![HTTP TCP Transport](https://img.shields.io/badge/Transport-Stdio%20%7C%20HTTP%20TCP%20:8000-purple.svg)
+[![Sponsor](https://img.shields.io/badge/%E2%99%A5-Sponsor-e91e63.svg)](https://github.com/sponsors/RLuf)
 
 <p align="center">
   <strong>Native Multimodal Computer Vision & Desktop Automation Server for AI Agents</strong>
@@ -18,7 +19,47 @@
 
 ---
 
-> **FzComputerAI** is a native **Computer Vision and UI Automation** server accessible via the **Model Context Protocol (MCP)**. Designed to empower AI Agents (such as Claude Code, Antigravity, FazAI-NG, Cursor, Windsurf, and local LLMs) to see the screen, analyze the visual structure of any desktop application, and execute actions with millimeter precision, both locally and remotely over **HTTP TCP/IP**.
+> **FzComputerAI** is the **native graphical interface** that manages a **Computer Vision and UI Automation** server accessible via the **Model Context Protocol (MCP)**. It lets AI Agents (Claude Code, Antigravity, FazAI-NG, Cursor, Windsurf, local LLMs) see the screen and operate any desktop application — and it handles the tedious part: starting the engine, configuring the port, proving the endpoint really answers, and publishing access over the LAN or the internet safely.
+>
+> The automation engine is **`cua-driver`**, from the open-source [**Cua**](https://github.com/trycua/cua) project (MIT, Cua AI, Inc.). FzComputerAI **does not replace the engine** — it is the cockpit for it.
+
+---
+
+## 🖼️ The tool
+
+<div align="center">
+
+**MCP & Network** — engine control, port, forwarding and diagnostics with **real** state (nothing assumed)
+
+![MCP & Network tab](assets/img/screenshot-mcp-rede.png)
+
+**Tunnel (Internet)** — publishes the local MCP on an HTTPS URL via Cloudflare, ngrok or reverse SSH
+
+![Tunnel tab](assets/img/screenshot-tunel.png)
+
+**MCP Tools** — catalog of the engine's tools, with filtering and one-click execution
+
+![MCP Tools tab](assets/img/screenshot-mcp-tools.png)
+
+</div>
+
+---
+
+## ✨ What the interface delivers
+
+| Feature | What it does |
+| :--- | :--- |
+| **Engine lifecycle** | Start, stop and restart `cua-driver` in one click, with Windows autostart. Closing the app shuts the engine down and undoes temporary configuration. |
+| **Honest status** | Nothing is assumed: the check is a real JSON-RPC `POST initialize`, and the LAN green badge only appears with a listener confirmed in `netstat` **and** the endpoint answering. |
+| **LAN access** | `netsh portproxy` forwarding applied by the app (elevating only when needed), a **3-state** badge (working / no effect / no rule) and tracked cleanup — it removes only the rules it created itself. |
+| **Internet access** | **Tunnel** tab: Cloudflare Tunnel (quick or named), ngrok and reverse SSH. **Outbound** tunnel — no router port forwarding required. |
+| **URL password** | Level-1 authentication through a local gate: the URL becomes `https://…/s/<password>/mcp`, and without the password requests get a 404. |
+| **Exposure probe** | The app tests the **public URL** with a credential-less request and reports the verified result — exposed, blocked at the edge, or not verifiable. |
+| **Tunnel never outlives the app** | Four cleanup layers (including a watchdog that acts on `taskkill /F` and crashes), killing only the process provably ours. |
+| **Update Center** | Checks and updates **two** components: this interface (installer downloaded in the background with verified SHA256 — only the final swap asks for confirmation) and the **engine** (end-to-end automatic update through its own official API, `check-update` / `update --apply`, with fallback to the official Cua installer). |
+| **MCP Tools catalog** | List, filter and run the vision and automation tools without leaving the interface. |
+| **Single console** | One global console at the bottom, visible in every section, scrolling like `tail -f`: it follows on its own and pauses when you scroll up to read. |
+| **Bilingual and native** | PT-BR / English in real time. Rust + `egui`, no Chromium, no WebView, no Node runtime. |
 
 ---
 
@@ -74,14 +115,15 @@ The server exposes a standardized set of MCP tools (*MCP Tools*) for multimodal 
 
 ---
 
-## 🖥️ Native GUI (Rust `fzcomputerai v2.0.0`)
+## 🖥️ Native GUI (Rust `fzcomputerai v2.1.0`)
 
-Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / English** with real-time language toggle. Organized into **6 tabs**:
+Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / English** with real-time language toggle. Organized into **7 tabs**:
 
 | Tab | Purpose |
 | :--- | :--- |
-| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), Windows PortProxy rule (netsh) connecting to confirmed CUA port, real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check for Updates** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
+| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), Windows PortProxy rule (netsh) connecting to confirmed CUA port, real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check & Update** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
 | **MCP Tools** | **[NEW v2.0.0]** Interactive visual catalog to list, filter by category, and run any MCP vision & automation tool directly. |
+| **Tunnel (Internet)** | **[NEW v2.1.0]** Exposes the local MCP HTTP endpoint to the internet (public HTTPS -> local HTTP) via **Cloudflare Tunnel** (quick + named, OAuth login/token), **ngrok**, and **reverse SSH** (own server or localhost.run/serveo). Captures the public URL, builds the `mcpServers` snippet, and truly tests it with a `POST initialize` exposure probe. Level-1 authentication = **URL password** through a local gate (`/s/<password>/mcp`). Clean lifecycle: the tunnel never outlives the app. **The MCP has no authentication of its own — read the tab's warning.** |
 | **Calibration & Vision** | Screen calibration, DPI scaling, and coordinate click testing. |
 | **Windows & Apps** | Active window listing, UIA inspection, and application launching. |
 | **Recording Trajectory** | Start and stop session/trajectory recordings. |
@@ -146,7 +188,7 @@ The installer (Inno Setup, bilingual PT-BR / English) does the following:
 - **Installs the GUI** into `%LOCALAPPDATA%\Programs\FzComputerAI` — the default case **does not trigger UAC**; you may choose to install for all users in the wizard (that path does elevate).
 - **Creates a Start Menu shortcut** and, optionally, a Desktop shortcut.
 - **"Start FzComputerAI with Windows" option** (autostart) — writes exactly the same `HKCU\...\Run` key used by the checkbox on the *MCP & Network* tab, so the GUI and the installer never contradict each other.
-- **"Install the `cua-driver` engine" option** (unchecked by default, requires internet) — runs the **official** cua project installer.
+- **"Install the `cua-driver` engine" option** (unchecked by default, requires internet) — runs the **official** cua project installer, which installs the **latest stable** release.
 - **Registers an uninstaller** under *Settings → Apps → Installed apps*. It removes the GUI; `cua-driver` has its own lifecycle and is **not** removed along with it (the uninstaller says so on screen).
 
 > ⚠️ **SmartScreen warning — read before running**
@@ -250,10 +292,27 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 
 ---
 
+## 📚 Documentation
+
+Detailed documentation lives in [`docs/`](docs/README.md) (written in Portuguese):
+
+| Document | What for |
+| :--- | :--- |
+| [Architecture](docs/arquitetura.md) | How the GUI and the engine split responsibilities, MCP transport, where state lives, honest-status principle |
+| [MCP & Network tab](docs/uso-mcp-rede.md) | Engine lifecycle, port, LAN forwarding and how to read the diagnostics |
+| [Tunnel tab](docs/uso-tunel.md) | Cloudflare, ngrok and reverse SSH step by step, URL password and exposure probe |
+| [Remote access](docs/acesso-remoto.md) | LAN vs tunnel vs VPN, and **why there is no `0.0.0.0` bind** |
+| [Updating](docs/atualizacao.md) | Update Center: interface and engine, and what is verified for each |
+| [Troubleshooting](docs/solucao-de-problemas.md) | Symptom → cause → check → fix |
+| [Development](docs/desenvolvimento.md) | Building, mandatory code conventions and installer build |
+| [FAQ](docs/faq.md) | Direct questions, honest answers |
+
+---
+
 ## 📜 License & Credits
 
-- **Base Project / Engine:** Based on the open-source project [Cua (`trycua/cua`)](https://github.com/trycua/cua) created by [Cua.ai](https://cua.ai).
-- **Owner & Lead Developer:** Roger Luft — Webstorage Tecnologia (`roger@webstorage.com.br`)
-- **Contact / Support:** +55 51 99242539
+- **Engine / Base project:** the `cua-driver` engine is part of the open-source [**Cua** (`trycua/cua`)](https://github.com/trycua/cua) project, developed and maintained by **Cua AI, Inc.** (the [cua.ai](https://cua.ai) team) under the **MIT License** — `Copyright (c) 2025 Cua AI, Inc.` FzComputerAI is an **independent graphical interface** built on top of that engine; it neither modifies nor redistributes it. **Our sincere thanks to Cua AI, Inc. and the Cua community** — this project would not exist without their work. Community: [Discord](https://discord.gg/mVnXXpdE85) · Docs: [cua.ai/docs](https://cua.ai/docs)
+- **Author & FzComputerAI integrations:** Roger Luft (VeilWalker) — Webstorage Tecnologia (`roger@webstorage.com.br`)
+- **License:** [MIT](LICENSE.md) — the same as the Cua project, for maximum compatibility. Full text, third-party components and the formal Cua citation are in [`LICENSE.md`](LICENSE.md).
+- **Support the project:** [GitHub Sponsors](https://github.com/sponsors/RLuf)
 - **Sponsors:** [Webstorage Tecnologia](https://www.webstorage.com.br) | [Imóvel Site](https://www.imovelsite.com.br)
-- **License:** [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)

@@ -90,7 +90,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libx11-dev libgl1-mesa-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libfontconfig1-dev libgtk-3-dev
+          # imagemagick: converte o .ico do repositorio em .png para o AppImage
+          # (o appimagetool exige icone png/svg; .ico nao passa na validacao).
+          sudo apt-get install -y pkg-config libx11-dev libgl1-mesa-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libfontconfig1-dev libgtk-3-dev imagemagick
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -259,6 +261,49 @@ jobs:
           cp fzcomputerai/target/release/fzcomputerai ${{ matrix.asset_name }}
 
       # ------------------------------------------------------------------
+      # PACOTES LINUX: .deb (cargo-deb), .rpm (cargo-generate-rpm) e AppImage
+      # (appimagetool oficial). Decisao do projeto: SEM snap, SEM .dmg.
+      # Os pacotes instalam apenas o binario da GUI (/usr/bin/fzcomputerai);
+      # o motor cua-driver e instalado a parte pelo instalador oficial do Cua.
+      # Metadados dos empacotadores: [package.metadata.deb] e
+      # [package.metadata.generate-rpm] em fzcomputerai/Cargo.toml.
+      # ------------------------------------------------------------------
+      - name: Package Linux (.deb, .rpm, AppImage)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${APP_VERSION}"
+
+          # .deb / .rpm — empacotadores padrao do ecossistema Rust, sobre o
+          # binario ja compilado (--no-build reaproveita o target/release).
+          cargo install cargo-deb cargo-generate-rpm --locked
+          cargo deb --manifest-path fzcomputerai/Cargo.toml --no-build -o "fzcomputerai_${V}_amd64.deb"
+          ( cd fzcomputerai && cargo generate-rpm -o "../fzcomputerai-${V}-1.x86_64.rpm" )
+
+          # AppImage — AppDir minimo (binario + .desktop + icone png).
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp fzcomputerai/target/release/fzcomputerai AppDir/usr/bin/fzcomputerai
+          convert 'installer/fzcomputerai.ico[0]' -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/fzcomputerai.png
+          cp AppDir/usr/share/icons/hicolor/256x256/apps/fzcomputerai.png AppDir/fzcomputerai.png
+          {
+            echo '[Desktop Entry]'
+            echo 'Type=Application'
+            echo 'Name=FzComputerAI'
+            echo 'Exec=fzcomputerai'
+            echo 'Icon=fzcomputerai'
+            echo 'Categories=Utility;'
+            echo 'Comment=Native cockpit for the cua-driver Computer Vision & UI Automation MCP engine'
+          } > AppDir/fzcomputerai.desktop
+          cp AppDir/fzcomputerai.desktop AppDir/usr/share/applications/
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          # Runner sem FUSE: --appimage-extract-and-run dispensa a montagem.
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir "fzcomputerai-${V}-x86_64.AppImage"
+
+          ls -l "fzcomputerai_${V}_amd64.deb" "fzcomputerai-${V}-1.x86_64.rpm" "fzcomputerai-${V}-x86_64.AppImage"
+
+      # ------------------------------------------------------------------
       # INSTALADOR WINDOWS (Inno Setup 6)
       # ------------------------------------------------------------------
       # ESTADO VERIFICADO EM 26/07/2026 (ao revisar, atualize a data e as evidencias):
@@ -394,6 +439,21 @@ jobs:
           cp "dist/${INSTALLER_NAME}" "./${INSTALLER_NAME}"
           ls -l "./${INSTALLER_NAME}"
 
+      # Pacote PORTATIL (.zip com marcador fzcomputerai.portable + LEIA-ME).
+      # O proprio script gera o .sha256 com nome-base, no mesmo formato dos
+      # demais artefatos. Nome: fzcomputerai-portable-v<versao>-windows-x64.zip
+      - name: Build Portable ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\make-portable.ps1 -Version $env:APP_VERSION
+          $zip = "dist\fzcomputerai-portable-v$($env:APP_VERSION)-windows-x64.zip"
+          if (-not (Test-Path $zip)) { throw "Portable nao gerado: $zip" }
+          Copy-Item $zip .\ -Force
+          Copy-Item "$zip.sha256" .\ -Force
+          Get-Item ".\fzcomputerai-portable-v$($env:APP_VERSION)-windows-x64.zip" | Format-List Name, Length
+
       - name: Generate SHA256 Checksums
         shell: bash
         run: |
@@ -418,6 +478,11 @@ jobs:
           if [ -f "${INSTALLER_NAME}" ]; then
             hash_file "${INSTALLER_NAME}"
           fi
+          # Pacotes Linux (deb/rpm/AppImage) — o portable Windows ja vem com
+          # .sha256 gerado pelo make-portable.ps1, nao rehasheia.
+          for f in fzcomputerai_*_amd64.deb fzcomputerai-*-1.x86_64.rpm fzcomputerai-*-x86_64.AppImage; do
+            if [ -f "$f" ]; then hash_file "$f"; fi
+          done
 
       # Nada e publicado aqui. Os arquivos vao para um artifact e o job
       # `publish-release` (unico, apos a matriz) monta o release final.
@@ -432,6 +497,14 @@ jobs:
             ${{ matrix.asset_name }}.sha256
             ${{ env.INSTALLER_NAME }}
             ${{ env.INSTALLER_NAME }}.sha256
+            fzcomputerai-portable-v*-windows-x64.zip
+            fzcomputerai-portable-v*-windows-x64.zip.sha256
+            fzcomputerai_*_amd64.deb
+            fzcomputerai_*_amd64.deb.sha256
+            fzcomputerai-*-1.x86_64.rpm
+            fzcomputerai-*-1.x86_64.rpm.sha256
+            fzcomputerai-*-x86_64.AppImage
+            fzcomputerai-*-x86_64.AppImage.sha256
 
   # --------------------------------------------------------------------------
   # PUBLICACAO DO RELEASE — UM JOB SO, DEPOIS DA MATRIZ
@@ -483,7 +556,9 @@ jobs:
           ls -l
 
           # Ordem canonica de exibicao dos artefatos no corpo do release.
-          ARTIFACTS="fzcomputerai-setup-windows-x64.exe fzcomputerai-windows-x64.exe fzcomputerai-macos fzcomputerai-linux-x64"
+          # Os nomes versionados usam a versao derivada do tag (sem o 'v').
+          V="${GITHUB_REF_NAME#v}"
+          ARTIFACTS="fzcomputerai-setup-windows-x64.exe fzcomputerai-portable-v${V}-windows-x64.zip fzcomputerai-windows-x64.exe fzcomputerai_${V}_amd64.deb fzcomputerai-${V}-1.x86_64.rpm fzcomputerai-${V}-x86_64.AppImage fzcomputerai-macos fzcomputerai-linux-x64"
 
           # Sem nenhum binario nao ha o que publicar.
           found=0
@@ -556,11 +631,15 @@ jobs:
           # Descricao por nome de arquivo — so entra na lista o que existe de fato.
           describe() {
             case "$1" in
-              fzcomputerai-setup-windows-x64.exe) echo "instalador Windows (Inno Setup)" ;;
-              fzcomputerai-windows-x64.exe)       echo "binário portátil Windows (x64)" ;;
-              fzcomputerai-macos)                 echo "binário macOS" ;;
-              fzcomputerai-linux-x64)             echo "binário Linux (x64)" ;;
-              *)                                  echo "artefato" ;;
+              fzcomputerai-setup-windows-x64.exe)          echo "instalador Windows (Inno Setup)" ;;
+              fzcomputerai-portable-v*-windows-x64.zip)    echo "pacote PORTÁTIL Windows (zip; preferências em .ini, sem registro)" ;;
+              fzcomputerai-windows-x64.exe)                echo "binário avulso Windows (x64)" ;;
+              fzcomputerai_*_amd64.deb)                    echo "pacote Debian/Ubuntu (.deb)" ;;
+              fzcomputerai-*-1.x86_64.rpm)                 echo "pacote Fedora/RHEL/openSUSE (.rpm)" ;;
+              fzcomputerai-*-x86_64.AppImage)              echo "AppImage Linux (execute direto, sem instalar)" ;;
+              fzcomputerai-macos)                          echo "binário macOS" ;;
+              fzcomputerai-linux-x64)                      echo "binário Linux (x64)" ;;
+              *)                                           echo "artefato" ;;
             esac
           }
 
@@ -569,6 +648,10 @@ jobs:
               echo "- \`$f\` — $(describe "$f")" >> "$BODY"
             fi
           done
+          # Código-fonte: o GitHub anexa "Source code (zip)" e "Source code
+          # (tar.gz)" automaticamente a TODO release — listado aqui para o
+          # leitor saber que eles fazem parte da entrega.
+          echo "- \`Source code (zip / tar.gz)\` — código-fonte desta tag (anexado automaticamente pelo GitHub)" >> "$BODY"
 
           {
             echo
