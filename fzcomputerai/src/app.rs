@@ -1726,6 +1726,25 @@ impl AppState {
     /// console segue (`poll_engine_log`). O autostart do Windows continua
     /// existindo para o logon — este caminho é o da GUI.
     pub fn start_daemon(&mut self) {
+        // JÁ ESTÁ NO AR? Então não encoste. "Iniciar" com o endpoint
+        // respondendo derrubava um daemon saudável e, por causa do TIME_WAIT do
+        // Windows (sockets da porta 8000 que já tiveram conexão ficam retidos
+        // por minutos), o novo `serve` não conseguia mais o bind:
+        // "MCP HTTP transport disabled (os error 10048)". Resultado prático:
+        // clicar Iniciar QUEBRAVA o que estava funcionando.
+        self.check_port_status();
+        if self.port_active {
+            self.daemon_running = true;
+            self.log_debug(
+                "[daemon] Ja esta no ar (endpoint respondendo): nada a fazer. Use Reiniciar para forcar uma troca de processo.",
+            );
+            self.status_msg = self.tr(
+                "O motor ja esta em execucao — endpoint respondendo.",
+                "The engine is already running — endpoint responding.",
+            );
+            return;
+        }
+
         #[cfg(target_os = "windows")]
         {
             let port = Self::read_user_env("CUA_DRIVER_RS_MCP_HTTP_PORT")
@@ -1769,61 +1788,85 @@ impl AppState {
             // Folga curta para o socket do processo morto ser reciclado pelo SO.
             std::thread::sleep(std::time::Duration::from_millis(600));
 
-            let mut cmd = quiet_cmd(&exe);
-            cmd.arg("serve").env("CUA_DRIVER_RS_MCP_HTTP_PORT", &port);
-            match &token {
-                Some(t) => {
-                    cmd.env("CUA_DRIVER_RS_MCP_HTTP_TOKEN", t);
-                }
-                None => self.log_debug(
-                    "[daemon] AVISO: CUA_DRIVER_RS_MCP_HTTP_TOKEN nao esta em HKCU\\Environment. Motores 0.16+ EXIGEM token e o daemon vai recusar subir.",
-                ),
+            if token.is_none() {
+                self.log_debug(
+                    "[daemon] AVISO: CUA_DRIVER_RS_MCP_HTTP_TOKEN nao esta em HKCU\\Environment e nao consegui gerar um. Motores 0.16+ EXIGEM token e o daemon vai recusar subir.",
+                );
             }
-            // Log REAL do motor num arquivo, para o console poder segui-lo
-            // (tail). Sem isto o stdout do daemon destacado se perde e o que um
-            // cliente MCP externo faz nao aparece em lugar nenhum.
             let log_path = Self::engine_log_path();
             if let Some(dir) = log_path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            // Trunca a cada subida: o tail comeca do zero junto com o daemon.
-            match std::fs::File::create(&log_path) {
-                Ok(f) => {
+
+            // RETRY com espera crescente. O socket do daemon anterior fica em
+            // TIME_WAIT quando houve conexões (o caso normal: alguém usou o
+            // MCP), e o motor sobe com "MCP HTTP transport disabled — bind
+            // failed (os error 10048)" — daemon zumbi: pipe vivo, porta muda.
+            // Esperar o processo morrer não basta; o SO precisa reciclar o
+            // socket. Três tentativas cobrem o TIME_WAIT típico do Windows.
+            //
+            // O Command é montado DENTRO do laço de propósito: um `Stdio` é
+            // CONSUMIDO no primeiro spawn, então reaproveitar o mesmo Command
+            // faria a segunda tentativa subir sem o log redirecionado (e foi
+            // exatamente o que aconteceu: o arquivo só continha a 1ª tentativa).
+            let mut launched = false;
+            for attempt in 1..=3 {
+                let mut cmd = quiet_cmd(&exe);
+                cmd.arg("serve").env("CUA_DRIVER_RS_MCP_HTTP_PORT", &port);
+                if let Some(t) = &token {
+                    cmd.env("CUA_DRIVER_RS_MCP_HTTP_TOKEN", t);
+                }
+                // Log REAL do motor num arquivo, para o console poder segui-lo
+                // (tail). Sem isto o stdout do daemon destacado se perde e o que
+                // um cliente MCP externo faz nao aparece em lugar nenhum.
+                // Trunca a cada tentativa: o tail comeca do zero junto com ela.
+                if let Ok(f) = std::fs::File::create(&log_path) {
                     let err_clone = f.try_clone().ok();
                     cmd.stdout(std::process::Stdio::from(f));
                     if let Some(e) = err_clone {
                         cmd.stderr(std::process::Stdio::from(e));
                     }
                     self.engine_log_pos = 0;
-                    self.log_debug(&format!(
-                        "[daemon] log do motor -> {} (seguido pelo console)",
-                        log_path.display()
-                    ));
                 }
-                Err(e) => self.log_debug(&format!(
-                    "[daemon] AVISO: nao consegui abrir o arquivo de log do motor ({}). O console seguira sem a saida do daemon.",
-                    e
-                )),
-            }
-            match cmd.spawn() {
-                Ok(_) => {
-                    // O listener leva ~1-3s para abrir; sondar antes disso
-                    // reportaria "parado" com o daemon subindo.
-                    for _ in 0..10 {
-                        std::thread::sleep(std::time::Duration::from_millis(400));
-                        self.check_port_status();
-                        if self.port_active {
-                            break;
+                match cmd.spawn() {
+                    Ok(_) => {
+                        launched = true;
+                        // O listener leva ~1-3s para abrir; sondar antes disso
+                        // reportaria "parado" com o daemon subindo.
+                        for _ in 0..10 {
+                            std::thread::sleep(std::time::Duration::from_millis(400));
+                            self.check_port_status();
+                            if self.port_active {
+                                break;
+                            }
                         }
                     }
-                    self.log_debug(&format!(
-                        "[daemon] 'serve' lancado (porta {}, token {}): porta ativa = {}",
-                        port,
-                        if token.is_some() { "presente" } else { "AUSENTE" },
-                        self.port_active
-                    ));
+                    Err(e) => {
+                        self.log_debug(&format!("[daemon] ERRO ao lancar 'serve': {}", e));
+                        break;
+                    }
                 }
-                Err(e) => self.log_debug(&format!("[daemon] ERRO ao lancar 'serve': {}", e)),
+                if self.port_active {
+                    break;
+                }
+                if attempt < 3 {
+                    self.log_debug(&format!(
+                        "[daemon] tentativa {}: a porta {} nao abriu (socket anterior ainda em TIME_WAIT). Parando e tentando de novo em {}s...",
+                        attempt,
+                        port,
+                        attempt * 3
+                    ));
+                    let _ = quiet_cmd(&exe).arg("stop").output();
+                    std::thread::sleep(std::time::Duration::from_secs((attempt * 3) as u64));
+                }
+            }
+            if launched {
+                self.log_debug(&format!(
+                    "[daemon] 'serve' lancado (porta {}, token {}): porta ativa = {}",
+                    port,
+                    if token.is_some() { "presente" } else { "AUSENTE" },
+                    self.port_active
+                ));
             }
 
             // Último recurso: se o `serve` próprio não abriu a porta (motor
