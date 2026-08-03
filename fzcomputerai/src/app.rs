@@ -161,6 +161,19 @@ pub struct AppState {
     // Segue o fim do log automaticamente; vira false quando o usuário rola
     // para cima (para poder ler) e volta a true quando ele retorna ao fim.
     pub console_follow: bool,
+    // Salto explícito para o fim ("Ir ao fim"). Tem precedência sobre a
+    // detecção por posição no frame do clique — sem isto o botão era anulado
+    // pela posição antiga do scroll lida logo abaixo, no mesmo frame.
+    pub console_jump: bool,
+
+    // ─── tail -f do log REAL do motor ───
+    // O daemon `cua-driver serve` roda destacado: sem redirecionar, o stdout
+    // dele se perde e o console da GUI só mostra os comandos que a PRÓPRIA
+    // GUI executa. Resultado: um cliente MCP externo (conector do Claude,
+    // Antigravity…) conversando com o motor não aparecia em lugar nenhum.
+    // Agora o daemon escreve num arquivo e a GUI o segue como `tail -f`.
+    pub engine_log_pos: u64,
+    pub engine_log_poll: Option<std::time::Instant>,
 
     // Iniciar com o Windows (HKCU\...\Run)
     pub autostart_enabled: bool,
@@ -303,6 +316,9 @@ impl Default for AppState {
             status_msg: String::new(),
             debug_log: String::new(),
             console_follow: true,
+            console_jump: false,
+            engine_log_pos: 0,
+            engine_log_poll: None,
             autostart_enabled: false,
             portable_mode: false, // definido de verdade no startup
             minimize_to_tray: false,
@@ -1622,14 +1638,211 @@ impl AppState {
         }
     }
 
+    /// Sobe o daemon do motor. O `autostart kick` sozinho NÃO basta desde o
+    /// motor 0.16+: a Scheduled Task herda o ambiente do LOGON, e quem
+    /// configurou `CUA_DRIVER_RS_MCP_HTTP_TOKEN` depois de logar (o caso
+    /// normal) sobe um daemon sem token — que morre com
+    /// "must be set to a host-generated bearer token" e deixa a porta muda.
+    /// Por isso o fallback lança `serve` DIRETO, com porta e token lidos do
+    /// registro e injetados no ambiente do processo filho. Só há UM daemon:
+    /// `stop` antes, senão o `serve` recusa com "already running".
+    /// Sobe o daemon do motor — a GUI é a DONA do processo, não uma
+    /// intermediária que pede para o Agendador de Tarefas fazer.
+    ///
+    /// POR QUE NÃO `autostart kick` (era o que esta função fazia): o `kick`
+    /// manda a Scheduled Task `cua-driver-serve` subir o daemon, e aí o
+    /// processo é filho do AGENDADOR. Três consequências, todas observadas:
+    ///   1. o stdout/stderr do motor pertence à task e se PERDE — a atividade
+    ///      de clientes MCP externos (conector do Claude, Antigravity, Cursor)
+    ///      nunca chegava ao console da GUI;
+    ///   2. a task herda o ambiente do LOGON, então token/porta gravados depois
+    ///      de logar não são vistos: com motor 0.16+ o daemon morre no ato
+    ///      ("must be set to a host-generated bearer token") e a porta fica muda;
+    ///   3. a GUI não sabe quando o daemon morreu — só descobre pela sonda.
+    /// Um gerenciador tem de ser dono do que gerencia: lançamos `serve` como
+    /// processo filho, com porta e token injetados e o stdout num arquivo que o
+    /// console segue (`poll_engine_log`). O autostart do Windows continua
+    /// existindo para o logon — este caminho é o da GUI.
     pub fn start_daemon(&mut self) {
-        let _ = self.run_logged("cua-driver", &["autostart", "kick"]);
+        #[cfg(target_os = "windows")]
+        {
+            let port = Self::read_user_env("CUA_DRIVER_RS_MCP_HTTP_PORT")
+                .unwrap_or_else(|| "8000".to_string());
+            let token = Self::read_user_env("CUA_DRIVER_RS_MCP_HTTP_TOKEN");
+            let exe = Self::engine_exe();
+
+            // Só pode existir UM daemon (o segundo `serve` recusa com
+            // "already running"): derruba o que estiver de pé — inclusive um
+            // subido pela task, sem HTTP — antes de assumir o processo.
+            let _ = self.run_logged(&exe, &["stop"]);
+            std::thread::sleep(std::time::Duration::from_millis(800));
+
+            let mut cmd = quiet_cmd(&exe);
+            cmd.arg("serve").env("CUA_DRIVER_RS_MCP_HTTP_PORT", &port);
+            match &token {
+                Some(t) => {
+                    cmd.env("CUA_DRIVER_RS_MCP_HTTP_TOKEN", t);
+                }
+                None => self.log_debug(
+                    "[daemon] AVISO: CUA_DRIVER_RS_MCP_HTTP_TOKEN nao esta em HKCU\\Environment. Motores 0.16+ EXIGEM token e o daemon vai recusar subir.",
+                ),
+            }
+            // Log REAL do motor num arquivo, para o console poder segui-lo
+            // (tail). Sem isto o stdout do daemon destacado se perde e o que um
+            // cliente MCP externo faz nao aparece em lugar nenhum.
+            let log_path = Self::engine_log_path();
+            if let Some(dir) = log_path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            // Trunca a cada subida: o tail comeca do zero junto com o daemon.
+            match std::fs::File::create(&log_path) {
+                Ok(f) => {
+                    let err_clone = f.try_clone().ok();
+                    cmd.stdout(std::process::Stdio::from(f));
+                    if let Some(e) = err_clone {
+                        cmd.stderr(std::process::Stdio::from(e));
+                    }
+                    self.engine_log_pos = 0;
+                    self.log_debug(&format!(
+                        "[daemon] log do motor -> {} (seguido pelo console)",
+                        log_path.display()
+                    ));
+                }
+                Err(e) => self.log_debug(&format!(
+                    "[daemon] AVISO: nao consegui abrir o arquivo de log do motor ({}). O console seguira sem a saida do daemon.",
+                    e
+                )),
+            }
+            match cmd.spawn() {
+                Ok(_) => {
+                    // O listener leva ~1-3s para abrir; sondar antes disso
+                    // reportaria "parado" com o daemon subindo.
+                    for _ in 0..10 {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        self.check_port_status();
+                        if self.port_active {
+                            break;
+                        }
+                    }
+                    self.log_debug(&format!(
+                        "[daemon] 'serve' lancado (porta {}, token {}): porta ativa = {}",
+                        port,
+                        if token.is_some() { "presente" } else { "AUSENTE" },
+                        self.port_active
+                    ));
+                }
+                Err(e) => self.log_debug(&format!("[daemon] ERRO ao lancar 'serve': {}", e)),
+            }
+
+            // Último recurso: se o `serve` próprio não abriu a porta (motor
+            // recusou por falta de token, exe inacessível), ainda tenta a task
+            // do Windows — melhor um daemon sem logs do que nenhum daemon.
+            if !self.port_active {
+                self.log_debug(
+                    "[daemon] 'serve' proprio nao abriu a porta; tentando a Scheduled Task (autostart kick) como ultimo recurso — sem logs no console, o processo nao sera nosso.",
+                );
+                let _ = self.run_logged(&exe, &["autostart", "kick"]);
+                for _ in 0..6 {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    self.check_port_status();
+                    if self.port_active {
+                        break;
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = self.run_logged("cua-driver", &["autostart", "kick"]);
+        }
+
         self.check_port_status();
         self.daemon_running = self.port_active;
     }
 
+    /// Arquivo onde o daemon do motor escreve stdout+stderr. Fica ao lado dos
+    /// artefatos de update, em %TEMP%, para não exigir permissão especial.
+    pub fn engine_log_path() -> std::path::PathBuf {
+        Self::update_dir().join("cua-driver-serve.log")
+    }
+
+    /// `tail -f` do log do motor: lê apenas o que chegou desde a última leitura
+    /// (posição guardada em `engine_log_pos`) e joga no console da GUI. É assim
+    /// que a atividade de clientes MCP EXTERNOS (conector do Claude, Antigravity,
+    /// Cursor…) aparece — ela nunca passa por `run_logged`, que só registra o
+    /// que a própria GUI executa.
+    pub fn poll_engine_log(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.engine_log_poll {
+            if now.duration_since(last).as_millis() < 700 {
+                return;
+            }
+        }
+        self.engine_log_poll = Some(now);
+
+        let path = Self::engine_log_path();
+        let Ok(meta) = std::fs::metadata(&path) else {
+            return;
+        };
+        let len = meta.len();
+        // Arquivo encolheu = daemon reiniciado e log truncado: recomeça do zero.
+        if len < self.engine_log_pos {
+            self.engine_log_pos = 0;
+        }
+        if len == self.engine_log_pos {
+            return;
+        }
+
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut f) = std::fs::File::open(&path) else {
+            return;
+        };
+        if f.seek(SeekFrom::Start(self.engine_log_pos)).is_err() {
+            return;
+        }
+        let mut buf = Vec::new();
+        if f.read_to_end(&mut buf).is_err() {
+            return;
+        }
+        self.engine_log_pos = len;
+        let text = String::from_utf8_lossy(&buf);
+        for line in text.lines() {
+            let line = line.trim_end();
+            if !line.is_empty() {
+                self.log_debug(&format!("[motor] {}", line));
+            }
+        }
+    }
+
+    /// Valor de uma variável de ambiente do USUÁRIO (HKCU\Environment) — a
+    /// fonte que o instalador semeia e que o processo já aberto não herda.
+    #[cfg(target_os = "windows")]
+    fn read_user_env(name: &str) -> Option<String> {
+        let out = quiet_cmd("reg")
+            .args(["query", "HKCU\\Environment", "/v", name])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        for line in text.lines() {
+            if line.contains(name) {
+                if let Some(pos) = line.find("REG_SZ") {
+                    let v = line[pos + "REG_SZ".len()..].trim();
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn stop_daemon(&mut self) {
-        let _ = self.run_logged("cua-driver", &["stop"]);
+        let exe = Self::engine_exe();
+        let _ = self.run_logged(&exe, &["stop"]);
         self.check_port_status();
         self.daemon_running = self.port_active;
     }
@@ -4292,6 +4505,10 @@ impl eframe::App for FzComputerApp {
 
         // Observa o download do upgrade em background (throttle interno de 1s).
         self.state.poll_update_download();
+        // tail -f do log REAL do motor: é o que traz para o console a atividade
+        // de clientes MCP externos (conector do Claude, Antigravity, Cursor…),
+        // que nunca passa por run_logged. Throttle interno de ~0,7s.
+        self.state.poll_engine_log();
         // Observa o túnel (captura de URL / morte do processo) e downloads de
         // binários de túnel (throttle interno de 1s cada).
         self.state.poll_tunnel();
@@ -4702,6 +4919,11 @@ impl eframe::App for FzComputerApp {
                             })
                             .clicked()
                         {
+                            // console_jump (e não só console_follow): a detecção
+                            // de posição no fim deste mesmo frame sobrescrevia o
+                            // follow com a posição ANTIGA do scroll e anulava o
+                            // clique — o botão não fazia nada.
+                            self.state.console_jump = true;
                             self.state.console_follow = true;
                         }
                     });
@@ -4729,10 +4951,11 @@ impl eframe::App for FzComputerApp {
 
                 ui.add_space(4.0);
 
+                let jumping = self.state.console_jump;
                 let out = egui::ScrollArea::vertical()
                     .id_salt("global_console_scroll")
                     .auto_shrink([false, false])
-                    .stick_to_bottom(self.state.console_follow)
+                    .stick_to_bottom(self.state.console_follow || jumping)
                     .show(ui, |ui| {
                         if self.state.debug_log.is_empty() {
                             ui.monospace(match self.state.language {
@@ -4746,8 +4969,16 @@ impl eframe::App for FzComputerApp {
 
                 // Detecta se o usuário está no fim: se sim, segue; se rolou
                 // para cima, pausa. É o comportamento de um tail de log.
-                let max_offset = (out.content_size.y - out.inner_rect.height()).max(0.0);
-                self.state.console_follow = out.state.offset.y >= max_offset - 8.0;
+                // No frame do "Ir ao fim" a posição lida ainda é a ANTIGA — por
+                // isso o salto tem precedência e só o frame seguinte volta a
+                // decidir pela posição real.
+                if jumping {
+                    self.state.console_jump = false;
+                    self.state.console_follow = true;
+                } else {
+                    let max_offset = (out.content_size.y - out.inner_rect.height()).max(0.0);
+                    self.state.console_follow = out.state.offset.y >= max_offset - 8.0;
+                }
             });
 
         // ─── PAINEL CENTRAL: só o conteúdo da seção ativa ───
