@@ -277,7 +277,11 @@ jobs:
 
           # .deb / .rpm — empacotadores padrao do ecossistema Rust, sobre o
           # binario ja compilado (--no-build reaproveita o target/release).
-          cargo install cargo-deb cargo-generate-rpm --locked
+          # --force: o cache do cargo (actions/cache em ~/.cargo/bin) pode já
+          # trazer os binários de um run anterior, e sem --force o
+          # `cargo install` aborta com "binary already exists in destination"
+          # — derrubando o job Linux inteiro só em runs COM cache quente.
+          cargo install cargo-deb cargo-generate-rpm --locked --force
           cargo deb --manifest-path fzcomputerai/Cargo.toml --no-build -o "fzcomputerai_${V}_amd64.deb"
           ( cd fzcomputerai && cargo generate-rpm -o "../fzcomputerai-${V}-1.x86_64.rpm" )
 
