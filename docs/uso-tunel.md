@@ -39,7 +39,7 @@ Um túnel por vez: um processo rastreado, uma URL pública, um snippet.
 | **Limites conhecidos** | serviço sem SLA para quick tunnels; a URL some ao reiniciar | conforme o seu plano Cloudflare | plano gratuito limitado — o modal de termos do app cita, por exemplo, 20.000 requisições/mês e 1 GB de tráfego; **confirme em ngrok.com/tos, pode mudar** | presets públicos não dão garantia de uptime; `BatchMode=yes` exige chave |
 | **Quando escolher** | teste rápido, sessão curta | uso recorrente com domínio e autenticação de borda | você já usa ngrok e quer basic-auth pronta | você tem servidor próprio e quer controle total do caminho |
 
-A GUI **não** classifica nenhuma dessas opções como "segura" por si. Segurança aqui vem do que você põe na frente do MCP: senha na URL, autenticação de borda, ou token do motor `0.16+`.
+A GUI **não** classifica nenhuma dessas opções como "segura" por si. Segurança aqui vem do que você põe na frente do MCP: senha na URL, autenticação de borda, ou o token exigido pelo próprio motor (medido em 2026-08-03 no `cua-driver` 0.17.0: sem `Authorization: Bearer <token>`, a resposta é 401).
 
 ## 3. Antes de iniciar qualquer túnel
 
@@ -111,7 +111,7 @@ ssh -N -T -E <log> -o BatchMode=yes -o StrictHostKeyChecking=accept-new
 
 ## 5. Nível 1 de autenticação: senha na URL
 
-O MCP do `cua-driver` aceita `POST` em **qualquer** caminho e (nas versões sem token) não valida credencial. O quick tunnel do Cloudflare e os serviços SSH públicos não têm autenticação de borda. Logo, "senha na URL" só é real com um **porteiro** no meio — e é isso que a GUI sobe.
+O MCP do `cua-driver` aceita `POST` em **qualquer** caminho e (nas versões sem token) não valida credencial. Nas versões com token — medido em 2026-08-03 no binário 0.17.0 — qualquer requisição sem `Authorization: Bearer <token>` leva **401** com `{"code":-32001,"message":"Authentication required"}`, o que é uma barreira do motor, não da borda. O quick tunnel do Cloudflare e os serviços SSH públicos não têm autenticação de borda. Logo, "senha na URL" só é real com um **porteiro** no meio — e é isso que a GUI sobe.
 
 Ao definir senha no modal de início:
 
@@ -153,7 +153,7 @@ O resultado é classificado só a partir do que a rede respondeu:
 | Badge | Como é decidido | O que fazer |
 | --- | --- | --- |
 | **EXPOSTO SEM AUTENTICAÇÃO (verificado agora)** | a resposta contém `"jsonrpc"` sem nenhuma credencial | qualquer pessoa com a URL controla esta máquina. Pare o túnel ou coloque senha/token/Access |
-| **BORDA EXIGIU AUTENTICAÇÃO (verificado: HTTP nnn)** | HTTP 401, 403, 302 ou 407 | há autenticação na frente. Confirme que é a **sua** (Access, basic-auth, porteiro) e não uma página de erro do provedor |
+| **BORDA EXIGIU AUTENTICAÇÃO (verificado: HTTP nnn)** | HTTP 401, 403, 302 ou 407 | há autenticação na frente. Confirme que é a **sua** (Access, basic-auth, porteiro) e não uma página de erro do provedor. Um 401 com corpo `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` não vem da borda: é o próprio motor exigindo o bearer token (medido na 0.17.0 em 2026-08-03) |
 | **NÃO FOI POSSÍVEL VERIFICAR — trate como exposto** | timeout, 5xx, falha do `curl` | não deu para provar nada. A postura honesta é assumir exposto até verificar |
 
 O badge só aparece **depois** que você roda a sonda. Enquanto isso, a tela não afirma nada sobre exposição. E o status **ATIVO** significa apenas "URL pública publicada" — não "verificado pela internet"; são estados separados de propósito.
@@ -186,7 +186,7 @@ Ao desinstalar o app, `{app}\tunnel` (binários baixados, token-file, policy do 
 | SSH sai imediatamente pedindo autenticação | `BatchMode=yes` impede prompt de senha, por design | use chave (`-i`) ou um destino que aceite chave/`nokey` |
 | Status fica **INICIANDO** e a URL não aparece | o CLI ainda não imprimiu a URL, ou o sufixo não é reconhecido (túnel nomeado, servidor próprio) | ngrok: **Descobrir URL (API local 4040)**. Cloudflare nomeado / SSH próprio: informe a URL à mão no campo |
 | URL pública responde **404** | é o porteiro de senha: o caminho não tem `/s/<senha>/` correta | use a URL completa que a GUI mostra (**Copiar URL**). Senha errada e ausência de senha produzem o mesmo 404, de propósito |
-| URL pública responde **502** | o porteiro/borda está de pé mas o MCP local não responde: motor parado, ou a porta mudou depois que o túnel subiu | verifique o badge na aba MCP & Rede, religue o motor e reinicie o túnel |
+| URL pública responde **502** | o porteiro/borda está de pé mas o MCP local não responde: motor parado, ou a porta mudou depois que o túnel subiu. Causa comum medida em 2026-08-03: sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do processo, o `cua-driver serve` sai com código 1 e a porta fica muda — e a Tarefa Agendada `cua-driver-serve` só enxerga o token a partir do logon seguinte ao `setx` | verifique o badge na aba MCP & Rede, religue o motor e reinicie o túnel |
 | Status vai para **ERRO** com trecho de log | o processo do túnel saiu sozinho | leia o final do log no console; conexão de rede, credencial expirada e limite de plano aparecem ali |
 | Sonda diz **EXPOSTO SEM AUTENTICAÇÃO** e você esperava proteção | senha vazia no início do túnel, ou a autenticação de borda não está aplicada à rota | pare o túnel, reinicie com senha, e/ou configure Cloudflare Access / basic-auth do ngrok |
 | Sonda diz **NÃO FOI POSSÍVEL VERIFICAR** | timeout de 20 s, 5xx da borda ou `curl.exe` ausente | tente novamente; confirme `curl --version`; trate como exposto até provar o contrário |
@@ -195,5 +195,5 @@ Ao desinstalar o app, `{app}\tunnel` (binários baixados, token-file, policy do 
 
 - [acesso-remoto.md](acesso-remoto.md) — comparação túnel x LAN x VPN, e as implicações de segurança de cada caminho.
 - [uso-mcp-rede.md](uso-mcp-rede.md) — o motor tem de estar respondendo em loopback antes de qualquer túnel.
-- [atualizacao.md](atualizacao.md) — motor `0.16+` exige token e muda o comportamento do endpoint.
+- [atualizacao.md](atualizacao.md) — o motor recente exige token (medido na 0.17.0: sem ele o `serve` nem sobe) e muda o comportamento do endpoint.
 - [solucao-de-problemas.md](solucao-de-problemas.md) — problemas que não são exclusivos do túnel.

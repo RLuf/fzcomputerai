@@ -24,6 +24,8 @@ O badge à direita do título tem três estados:
 
 > "Iniciar com Windows" liga a **GUI** no logon. A tarefa de autostart do **motor** é assunto do próprio `cua-driver` (registrada pelo instalador oficial dele) — são coisas separadas.
 
+> A Scheduled Task `cua-driver-serve`, que o `autostart kick` dispara, **herda o ambiente do logon**: quem gravou o token em `HKCU\Environment` depois de já estar logado sobe um daemon sem token, que morre na hora e deixa a porta muda (medido em 2026-08-03, motor 0.17.0). Corrigido na GUI v2.1.0 — quando o `kick` não abre a porta, ela lê porta e token do registro, para o daemon anterior (só pode existir um por vez) e lança `serve` com as variáveis injetadas no processo filho.
+
 ## 2. Configuração de Porta & Rede
 
 Dois campos e dois botões.
@@ -138,7 +140,13 @@ curl -sS -X POST http://127.0.0.1:8000/mcp `
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual","version":"1"}}}'
 ```
 
-Se o comando 3 retornar **401**, o motor instalado é da série `0.16+` e exige token: acrescente `-H "Authorization: Bearer <token>"`. A GUI faz isso automaticamente quando encontra `CUA_DRIVER_RS_MCP_HTTP_TOKEN` em `HKCU\Environment`.
+Se o comando 3 retornar **401**, falta o token. Acrescente `-H "Authorization: Bearer <token>"`. A GUI faz isso automaticamente quando encontra `CUA_DRIVER_RS_MCP_HTTP_TOKEN` em `HKCU\Environment`.
+
+O contrato do token não é citação de documentação: foi **medido no binário `cua-driver` 0.17.0 em 2026-08-03**.
+
+- Sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente **do processo**, o daemon nem sobe: `cua-driver serve` sai com exit 1 e stderr `CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`. Não é recusa de requisição, é recusa de inicialização — na GUI isso aparece como badge **PARADO** e porta muda.
+- Com o daemon no ar, qualquer requisição sem `Authorization` recebe **HTTP 401** com corpo `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` — idêntico em `POST /mcp`, `GET /mcp` e `GET /`, e sem cabeçalho `WWW-Authenticate`. A conexão TCP em si é aceita (`Test-NetConnection` dá `True`): a recusa é na camada de aplicação, não no socket. Com o `Bearer` correto, **HTTP 200** e o `result` do `initialize`.
+- O token é gerado por **você** — qualquer string aleatória; o próprio motor a chama de *host-generated bearer token*. Não existe comando no `cua-driver` nem no `install.ps1` oficial que gere token. Gravar em `HKCU\Environment` é o que faz a tarefa de autostart enxergá-lo no próximo logon.
 
 ## Ver também
 

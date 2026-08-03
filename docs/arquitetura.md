@@ -20,14 +20,21 @@ O motor expõe MCP (Model Context Protocol) por dois transportes:
 | Transporte | Como se usa | Observação |
 | --- | --- | --- |
 | **stdio** | o cliente MCP lança `cua-driver` e conversa por entrada/saída padrão | não envolve rede; não aparece no `netstat` |
-| **HTTP** | `POST /mcp`, corpo JSON-RPC 2.0 | **só sobe se `CUA_DRIVER_RS_MCP_HTTP_PORT` estiver definida** |
+| **HTTP** | `POST /mcp`, corpo JSON-RPC 2.0 | **só sobe se `CUA_DRIVER_RS_MCP_HTTP_PORT` estiver definida** — e, no motor `0.17.0`, só sobe se `CUA_DRIVER_RS_MCP_HTTP_TOKEN` também estiver (ver abaixo) |
 
 Detalhes que a GUI depende (verificados no motor instalado e no repositório upstream):
 
 - Sem a variável `CUA_DRIVER_RS_MCP_HTTP_PORT`, **o listener HTTP nem é criado**. Não existe porta padrão implícita — a GUI usa 8000 apenas como valor inicial do campo.
 - **O endereço de escuta não é configurável.** O motor oficial escuta somente em `127.0.0.1`; o endereço está fixo no código do Cua (`([127,0,0,1], port)`). A string `CUA_DRIVER_RS_MCP_HTTP_BIND` **não existe** no binário oficial instalado e a busca por ela no repositório `trycua/cua` retorna zero resultado.
 - Uma versão anterior desta documentação afirmava haver bind `0.0.0.0`. **Era falso e foi corrigido.** Se alguém quiser reintroduzir a ideia, o comentário em `apply_env_port()` (`fzcomputerai/src/app.rs`) explica por quê não: gravar aquela variável não publica nada, o motor a ignora. A GUI hoje até **remove** a variável se encontrar sobra dela em `HKCU\Environment`, para não confundir o diagnóstico.
-- **Autenticação depende da versão do motor.** A série `0.16+` **exige** `CUA_DRIVER_RS_MCP_HTTP_TOKEN` (32 a 4096 caracteres, sem espaço nem caractere de controle) e responde **401** a qualquer POST sem `Authorization: Bearer <token>`; ela também rejeita requisições com origem de navegador. Versões antigas (série `0.8.x`) **não têm token nenhum** — o instalador não pina versão: o passo do motor executa o instalador oficial do Cua, que resolve a última versão estável publicada. A GUI lê o token de `HKCU\Environment` na abertura (`read_mcp_token()`) e envia o header **somente quando há token configurado** — assim o mesmo teste funciona com as duas gerações.
+- **Autenticação depende da versão do motor.** O contrato abaixo foi **medido no binário `cua-driver` 0.17.0 em 2026-08-03** — antes disso esta documentação apenas repetia a si mesma, sem fonte primária. São **dois** níveis distintos, e confundi-los é a causa clássica de diagnóstico errado:
+
+  1. **Sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do processo, o daemon nem sobe.** `cua-driver serve` sai com código 1 e imprime em `stderr`: `cua-driver serve error: CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`. O resultado não é "requisição recusada", é **porta muda**.
+  2. **Com o daemon no ar, requisição sem `Authorization: Bearer <token>` recebe 401**, com o corpo `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}`. Idêntico em `POST /mcp`, `GET /mcp` e `GET /`; **não** vem header `WWW-Authenticate`. O TCP em si é aceito (`Test-NetConnection` na porta responde `True`) — a recusa é da camada de aplicação. Com o header correto: **200**, com o `result` do `initialize`.
+
+  O token é **gerado pelo usuário** — qualquer string aleatória serve; o próprio motor a chama de *host-generated bearer token*. Não existe comando no `cua-driver` nem no `install.ps1` oficial do Cua que gere um. Versões antigas (série `0.8.x`) **não têm token nenhum** — o instalador não pina versão: o passo do motor executa o instalador oficial do Cua, que resolve a última versão estável publicada. A GUI lê o token de `HKCU\Environment` na abertura (`read_mcp_token()`) e envia o header **somente quando há token configurado** — assim o mesmo teste funciona com as duas gerações.
+
+- **Só existe um daemon, e ele herda o ambiente de quem o lançou.** Um segundo `serve` é recusado com `Cua Driver daemon is already running on \\.\pipe\cua-driver (pid N). Run 'cua-driver stop' first.`. E a Scheduled Task `cua-driver-serve` (a que `cua-driver autostart kick` aciona) herda o ambiente do **logon**: quem gravou o token em `HKCU\Environment` **depois** de logar sobe um daemon sem token, que morre na hora pelo item 1 e deixa a porta muda. Desde a GUI **v2.1.0**, quando o `kick` não abre a porta, a GUI lê porta e token do registro, para o daemon anterior e lança o `serve` com as variáveis injetadas no processo filho.
 
 Consequência direta: **sair do loopback nunca é questão de configuração do motor**. É encaminhamento (LAN) ou túnel (internet). Ver [acesso-remoto.md](acesso-remoto.md).
 
@@ -112,7 +119,7 @@ Não existe arquivo de configuração do FzComputerAI, e o *storage* do eframe n
 | Chave / valor | Conteúdo | Quem escreve |
 | --- | --- | --- |
 | `HKCU\Environment` -> `CUA_DRIVER_RS_MCP_HTTP_PORT` | porta do endpoint HTTP do motor | botão **Aplicar Porta** (`set_user_env_confirmed`) |
-| `HKCU\Environment` -> `CUA_DRIVER_RS_MCP_HTTP_TOKEN` | token do endpoint (motor `0.16+`) | **não é escrito pela GUI** — apenas lido |
+| `HKCU\Environment` -> `CUA_DRIVER_RS_MCP_HTTP_TOKEN` | token do endpoint (motor `0.16+`), string escolhida pelo usuário | **não é escrito pela GUI** — apenas lido (e injetado no processo filho quando a GUI precisa lançar o `serve` ela mesma). A Scheduled Task do daemon só enxerga a variável **no próximo logon** |
 | `HKCU\Environment` -> `CUA_DRIVER_RS_MCP_HTTP_BIND` | — | **é apagado** se existir: o motor oficial a ignora |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` -> `FzComputerAI` | caminho do executável entre aspas | checkbox **Iniciar com Windows** e a task `autostart` do instalador (mesmo nome e mesmo formato, de propósito) |
 | `HKCU\Software\FzComputerAI` -> `portproxy:<ip>:<porta>` | porta de destino da regra; marca a regra como **propriedade deste app** | `apply_portproxy()` |

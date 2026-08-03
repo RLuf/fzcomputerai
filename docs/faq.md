@@ -36,7 +36,7 @@ Depende **exclusivamente** do que você põe na frente do MCP. O endpoint dá co
 | túnel sem senha, sem token, sem Access | **não é seguro.** Qualquer pessoa com a URL controla a máquina. Uma URL aleatória não é autenticação: ela vaza em log, histórico, print e arquivo de config |
 | senha na URL (porteiro local) | bloqueia varredura e acesso casual — sem `/s/<senha>/` o porteiro responde 404 e o MCP nem é tocado. Limites: a senha viaja no caminho da URL, é gerada por PRNG simples (não criptográfico) e não tem rotação nem expiração |
 | autenticação de borda (Cloudflare Access, basic-auth do ngrok, proxy autenticado seu) | nível mais forte que este app apoia: a checagem acontece antes de a requisição chegar à sua máquina |
-| motor `0.16+` com token | melhora real — sem `Authorization: Bearer <token>` o motor responde 401. Mas quem tiver **URL + token** controla a máquina; trate o token como senha. E um motor antigo (como o 0.8.3) **não tem token nenhum** — o instalador atual aplica a última versão estável publicada |
+| motor com token (`CUA_DRIVER_RS_MCP_HTTP_TOKEN`) | melhora real, e agora medida no binário `cua-driver` 0.17.0 em 2026-08-03: sem `Authorization: Bearer <token>` o motor responde **401** com `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` — igual em `POST /mcp`, `GET /mcp` e `GET /` — e, sem a variável no ambiente do processo, o `serve` sequer sobe (`exit 1`). Com o header correto, 200 com o `result` do `initialize`. Mas quem tiver **URL + token** controla a máquina; trate o token como senha. O valor é escolhido por você (o motor o chama de "host-generated bearer token"; não existe comando que gere um). E um motor antigo (como o 0.8.3) **não tem token nenhum** — o instalador atual aplica a última versão estável publicada |
 
 Regra prática: suba o túnel, rode **Testar pela internet** e acredite no badge — não na intenção. Se o resultado for "NÃO FOI POSSÍVEL VERIFICAR", trate como exposto.
 
@@ -44,7 +44,7 @@ Regra prática: suba o túnel, rode **Testar pela internet** e acredite no badge
 
 É intencional. Fechar a GUI significa desligar o conjunto: o `on_exit` encerra o motor, mata o túnel e o porteiro de senha, e remove as regras de encaminhamento **que este app criou** (as registradas em `HKCU\Software\FzComputerAI`). O objetivo é não deixar porta aberta nem URL pública viva com o software "fechado".
 
-Se você quer o motor rodando com a GUI fechada, esse é o papel da tarefa de autostart do **próprio** `cua-driver`, registrada pelo instalador oficial dele.
+Se você quer o motor rodando com a GUI fechada, esse é o papel da tarefa de autostart do **próprio** `cua-driver`, registrada pelo instalador oficial dele. Um detalhe medido em 2026-08-03 (motor 0.17.0): essa Scheduled Task herda o ambiente do **logon**, e o `serve` sai com `exit 1` quando não enxerga `CUA_DRIVER_RS_MCP_HTTP_TOKEN` — token gravado em `HKCU\Environment` depois de logar só é visto no próximo logon; até lá o daemon morre ao subir e a porta fica muda.
 
 ### Qual a diferença entre "a porta" e "o encaminhamento"?
 
@@ -73,7 +73,7 @@ Amarelo ("LOCAL apenas") é o estado **correto e esperado** do motor oficial: el
 
 ### Por que preciso de POST para testar? `curl http://127.0.0.1:8000/mcp` não serve?
 
-Não serve como prova. O endpoint MCP responde legitimamente `405 Method Not Allowed` a um GET, o que provaria apenas que existe um socket TCP aceitando conexão — não que há um servidor MCP do outro lado. Por isso o teste da GUI é um `POST /mcp` com um `initialize` JSON-RPC real, e só conta se a resposta contiver `"jsonrpc"`.
+Não serve como prova. O endpoint MCP responde legitimamente `405 Method Not Allowed` a um GET, o que provaria apenas que existe um socket TCP aceitando conexão — não que há um servidor MCP do outro lado. Por isso o teste da GUI é um `POST /mcp` com um `initialize` JSON-RPC real, e só conta se a resposta contiver `"jsonrpc"`. Com o motor exigindo token, esse GET nem chega ao 405: medido no `cua-driver` 0.17.0 em 2026-08-03, requisição sem `Authorization` volta **401** em `GET /`, `GET /mcp` e `POST /mcp` — o POST de teste precisa levar `Authorization: Bearer <token>`.
 
 ### Onde ficam as configurações? Não achei arquivo de config.
 

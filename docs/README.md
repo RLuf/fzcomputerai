@@ -21,7 +21,7 @@ Para quem vai instalar, operar ou desenvolver o FzComputerAI — a interface gr�
 
 ## Convenções desta documentação
 
-- Onde o comportamento **depende da versão do motor**, isso está dito no texto. As duas gerações relevantes são: `<= 0.8.x` (sem autenticação no endpoint HTTP) e `>= 0.16` (token obrigatório).
+- Onde o comportamento **depende da versão do motor**, isso está dito no texto. As duas gerações relevantes são: `<= 0.8.x` (sem autenticação no endpoint HTTP) e `>= 0.16` (token obrigatório). O contrato do token foi **medido no binário 0.17.0 em 2026-08-03**, e não é herdado de documentação anterior: sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente, `cua-driver serve` **nem sobe**; com o daemon no ar, requisição sem `Authorization: Bearer` recebe **401** (`-32001 Authentication required`). Detalhes em [arquitetura.md](arquitetura.md) e [atualizacao.md](atualizacao.md).
 - Caminhos de código aparecem relativos à raiz do repositório, por exemplo `fzcomputerai/src/app.rs`.
 - Nada aqui afirma que algo "é seguro" sem dizer **sob qual condição**.
 

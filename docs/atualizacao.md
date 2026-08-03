@@ -11,7 +11,7 @@ O botão **Verificar e Atualizar** (aba MCP & Rede) cuida de **duas** coisas —
 | **Interface (FzComputerAI)** | esta GUI | GitHub Releases de `RLuf/fzcomputerai` (`releases/latest`), comparando com `env!("CARGO_PKG_VERSION")` | download do instalador **com SHA256 conferido** + instalação silenciosa |
 | **Motor (`cua-driver`)** | quem faz o trabalho | `cua-driver check-update --json` — a **API oficial do próprio motor** | `cua-driver update --apply` — o **atualizador oficial dele**, em processo destacado; se o subcomando não existir ou falhar (ex.: motor 0.8.3), **fallback automático** para o instalador oficial do projeto Cua, que instala a última versão estável do GitHub |
 
-Por que o motor entra aqui: enquanto o botão olhava apenas a GUI, o motor podia ficar dezenas de versões atrás sem ninguém perceber — e foi o que aconteceu. Na máquina de referência, **0.8.3 instalado** contra **0.17.0 publicado** (em 2026-08-02). Versões novas do motor mudam contrato (por exemplo, passaram a exigir token no endpoint HTTP), então saber a versão real não é cosmético: é o que evita a GUI reportar estado errado.
+Por que o motor entra aqui: enquanto o botão olhava apenas a GUI, o motor podia ficar dezenas de versões atrás sem ninguém perceber — e foi o que aconteceu. Na máquina de referência, **0.8.3 instalado** contra **0.17.0 publicado** (em 2026-08-02). Versões novas do motor mudam contrato — o caso concreto, **medido no 0.17.0 em 2026-08-03**: sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` o `serve` **nem sobe**, e com o daemon no ar toda requisição sem `Authorization: Bearer` recebe **401**. Saber a versão real, portanto, não é cosmético: é o que evita a GUI reportar estado errado.
 
 **Nunca baixamos binário do motor por conta própria.** Quem publica e instala o motor é o projeto Cua.
 
@@ -56,14 +56,20 @@ cua-driver check-update --json     # relê a versão para a GUI
 
 Fora do Windows, a chamada é direta (`cua-driver update --apply`), sem o envelope de autostart, que é específico do Windows.
 
-## 4. Aviso importante: motor novo pode exigir token
+## 4. Aviso importante: motor novo exige token (verificado)
 
-Versões da série **`0.16+`** do `cua-driver` **exigem** `CUA_DRIVER_RS_MCP_HTTP_TOKEN` (32 a 4096 caracteres, sem espaço nem caractere de controle) e respondem **401** a qualquer `POST /mcp` sem `Authorization: Bearer <token>`; elas também rejeitam requisições com origem de navegador. Versões antigas (como a **0.8.3**) não têm token nenhum.
+Isto foi **medido no binário `cua-driver` 0.17.0 em 2026-08-03** — não é mais "a documentação diz". Dois níveis, que na tela parecem o mesmo problema mas não são:
+
+- **Sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do processo, o daemon nem sobe:** `cua-driver serve` sai com código 1 e o erro `CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`. A porta simplesmente não abre.
+- **Com o daemon no ar, requisição sem `Authorization: Bearer <token>` recebe 401**, corpo `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` — igual em `POST /mcp`, `GET /mcp` e `GET /`, e sem header `WWW-Authenticate`. Com o header correto, **200** e o `result` do `initialize`.
+
+O token é **gerado por você**: qualquer string aleatória serve — o próprio motor a chama de *host-generated bearer token*. Não há comando no `cua-driver` nem no instalador oficial do Cua que gere um. Versões antigas (como a **0.8.3**) não têm token nenhum.
 
 Consequências práticas depois de atualizar o motor:
 
-- se você **não** configurar o token, o endpoint HTTP responderá 401 e a aba MCP & Rede mostrará **PARADO** — corretamente, porque o teste é um POST real e ele foi barrado;
-- a GUI **lê** o token de `HKCU\Environment` na abertura e passa a enviar o header `Authorization: Bearer` em todos os testes. Ela **não gera nem grava** o token: configurar o motor é papel do motor;
+- se você **não** configurar o token, não é "o endpoint responde 401": o daemon morre ao subir e a aba MCP & Rede mostrará **PARADO** — corretamente, porque o teste é um POST real e não há ninguém escutando;
+- **grave o token em `HKCU\Environment` (`setx`) e considere o logon.** A Scheduled Task que sobe o daemon herda o ambiente do **logon**: token gravado depois de você logar só é enxergado por ela no próximo. Desde a GUI **v2.1.0**, quando o `autostart kick` não abre a porta, a GUI lê porta e token do registro, para o daemon anterior e lança o `serve` com as variáveis injetadas no processo filho — que é o que destrava o caso "task rodou, porta muda";
+- a GUI **lê** o token de `HKCU\Environment` na abertura e passa a enviar o header `Authorization: Bearer` em todos os testes. Ela **não gera nem grava** o token: escolher o segredo é papel de quem opera a máquina;
 - se você configurou o token com o app aberto, **reabra o app** para ele reler a variável;
 - clientes MCP que já estavam conectados precisam passar a enviar o header. Snippets antigos sem `Authorization` deixam de funcionar.
 

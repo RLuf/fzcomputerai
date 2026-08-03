@@ -8,7 +8,8 @@ Para quem tem um sintoma na tela e quer chegar à causa sem chutar.
 
 | Sintoma | Causa provável | Verificação | Correção |
 | --- | --- | --- | --- |
-| "MCP parado" mas o motor está rodando | motor `0.16+` exigindo token: o POST de teste recebe **401** | `curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/mcp -d '{}'` retorna 401 | configure `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do usuário (32–4096 caracteres) e **reabra a GUI**, que relê a variável na abertura |
+| "MCP parado" mas o motor está rodando | motor exigindo token: o POST de teste recebe **401**. Medido no binário `cua-driver` 0.17.0 em 2026-08-03: sem o header `Authorization`, a resposta é `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}`, idêntica em `POST /mcp`, `GET /mcp` e `GET /`, e **sem** header `WWW-Authenticate`. A conexão TCP é aceita normalmente (`Test-NetConnection` na porta dá `True`) — a recusa é na camada de aplicação | `curl -sS -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/mcp -d '{}'` retorna 401 | configure `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do usuário (o valor é escolhido por você — o próprio motor o chama de "host-generated bearer token"; não há comando que gere um) e **reabra a GUI**, que relê a variável na abertura. Com `Authorization: Bearer <token>` a mesma requisição volta 200 com o `result` do `initialize` |
+| Porta muda: nada escutando, e o motor "sobe e some" | sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` **no ambiente do processo**, o `cua-driver serve` sai com `exit 1` — o daemon nem chega a subir (medido na 0.17.0 em 2026-08-03) | o `stderr` do `serve` traz `cua-driver serve error: CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled` | a Scheduled Task `cua-driver-serve` (usada pelo `autostart kick`) herda o ambiente do **logon**: quem gravou o token em `HKCU\Environment` depois de logar sobe um daemon sem token, que morre na hora e deixa a porta muda. Faça logoff/logon, ou use a GUI 2.1.0+: quando o kick não abre a porta, ela lê porta e token do registro, para o daemon anterior e lança o `serve` com as variáveis injetadas no processo filho. Só pode existir **um** daemon — um segundo `serve` recusa com "Cua Driver daemon is already running on `\\.\pipe\cua-driver` (pid N). Run `cua-driver stop` first." |
 | "MCP parado" mas o processo do motor existe | `CUA_DRIVER_RS_MCP_HTTP_PORT` ausente: **sem ela o listener HTTP nem sobe** | `reg query "HKCU\Environment" /v CUA_DRIVER_RS_MCP_HTTP_PORT` | aba MCP & Rede -> **Aplicar Porta** (grava, confirma relendo o registro e reinicia o motor) |
 | "MCP parado" e a porta está configurada | a porta configurada é outra que não a do campo | leia as linhas do `netstat` no diagnóstico: elas mostram a porta real em uso | ajuste o campo Porta para a porta real, ou **Aplicar Porta** para gravar a que você quer |
 | Listener só em `127.0.0.1` | **comportamento normal e esperado** do motor oficial: endereço fixo no código, sem variável de bind | badge **LOCAL apenas**; no `netstat`, a coluna LOCAL mostra `127.0.0.1:<porta>` | para LAN use **Aplicar Regra** (encaminhamento); para internet use a aba **Túnel**. Não procure por bind `0.0.0.0`: não existe |
@@ -65,10 +66,11 @@ Get-Service iphlpsvc | Format-List Name, Status, StartType
 # O que ESTE app registrou como propriedade dele
 reg query "HKCU\Software\FzComputerAI"
 
-# Prova real do MCP (GET não serve: o endpoint responde 405)
+# Prova real do MCP (GET não serve; e sem o header Authorization a resposta é 401)
 curl -sS -X POST http://127.0.0.1:8000/mcp `
   -H "Content-Type: application/json" `
   -H "Accept: application/json, text/event-stream" `
+  -H "Authorization: Bearer $env:CUA_DRIVER_RS_MCP_HTTP_TOKEN" `
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual","version":"1"}}}'
 ```
 
@@ -77,8 +79,8 @@ Interpretação rápida da última resposta:
 | Resposta | Leitura |
 | --- | --- |
 | JSON contendo `"jsonrpc"` | MCP funcionando |
-| `401` | motor `0.16+` exigindo token |
-| `405` | você usou GET; o endpoint existe mas exige POST |
+| `401` com `{"error":{"code":-32001,"message":"Authentication required"}}` | motor exigindo token: falta (ou está errado) o header `Authorization: Bearer <token>`. Medido na 0.17.0 em 2026-08-03 |
+| `405` | você usou GET; o endpoint existe mas exige POST. Atenção: sem `Authorization`, o GET responde **401**, não 405 (também medido na 0.17.0) |
 | conexão recusada | nada escutando nessa porta |
 
 ## Reunindo informação para relatar um problema

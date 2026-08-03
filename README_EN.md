@@ -123,7 +123,7 @@ Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / E
 | :--- | :--- |
 | **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), Windows PortProxy rule (netsh) connecting to confirmed CUA port, real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check & Update** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
 | **MCP Tools** | **[NEW v2.0.0]** Interactive visual catalog to list, filter by category, and run any MCP vision & automation tool directly. |
-| **Tunnel (Internet)** | **[NEW v2.1.0]** Exposes the local MCP HTTP endpoint to the internet (public HTTPS -> local HTTP) via **Cloudflare Tunnel** (quick + named, OAuth login/token), **ngrok**, and **reverse SSH** (own server or localhost.run/serveo). Captures the public URL, builds the `mcpServers` snippet, and truly tests it with a `POST initialize` exposure probe. Level-1 authentication = **URL password** through a local gate (`/s/<password>/mcp`). Clean lifecycle: the tunnel never outlives the app. **The MCP has no authentication of its own — read the tab's warning.** |
+| **Tunnel (Internet)** | **[NEW v2.1.0]** Exposes the local MCP HTTP endpoint to the internet (public HTTPS -> local HTTP) via **Cloudflare Tunnel** (quick + named, OAuth login/token), **ngrok**, and **reverse SSH** (own server or localhost.run/serveo). Captures the public URL, builds the `mcpServers` snippet, and truly tests it with a `POST initialize` exposure probe. Level-1 authentication = **URL password** through a local gate (`/s/<password>/mcp`). Clean lifecycle: the tunnel never outlives the app. **The engine does have authentication of its own — measured on 2026-08-03 against `cua-driver` 0.17.0: every request without `Authorization: Bearer <token>` gets HTTP 401 `{"code":-32001,"message":"Authentication required"}`. The URL password is an extra layer at the edge, not a replacement for the token.** |
 | **Calibration & Vision** | Screen calibration, DPI scaling, and coordinate click testing. |
 | **Windows & Apps** | Active window listing, UIA inspection, and application launching. |
 | **Recording Trajectory** | Start and stop session/trajectory recordings. |
@@ -166,14 +166,22 @@ In addition to local `stdio` mode, the server supports remote connections via th
 ```powershell
 # Set TCP port 8000 for the MCP server
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
+# Mandatory token: any random string you generate yourself
+# (the engine itself calls it a "host-generated bearer token" — no command generates it for you)
+[Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_TOKEN', '<your-token>', 'User')
 cua-driver stop
 cua-driver autostart kick
 ```
+
+> **Measured on 2026-08-03 against the `cua-driver` 0.17.0 binary** (an actual run, not documentation quoting documentation): without `CUA_DRIVER_RS_MCP_HTTP_TOKEN` in the process environment, `cua-driver serve` **does not even start** — it exits with code 1 and the message `CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`.
+>
+> Watch out for autostart: the `cua-driver-serve` Scheduled Task (used by `autostart kick`) **inherits the logon environment**, so a token written after you logged in is only seen at the next logon — until then the daemon starts without a token, dies immediately and leaves the port silent. The v2.1.0 GUI works around this: when the kick does not open the port, it reads port and token from the registry, stops the previous daemon and launches `serve` with the variables injected into the child process (only **one** daemon may exist at a time).
 
 ### Configuring the HTTP Client / Orchestrator:
 - **Endpoint**: `http://<WINDOWS_IP>:8000/mcp`
 - **Method**: `POST`
 - **Header**: `Content-Type: application/json`
+- **Header**: `Authorization: Bearer <your-token>` — **mandatory**. Measured on 2026-08-03: without it, `POST /mcp`, `GET /mcp` and `GET /` all three return the same HTTP 401 with `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` (and **no** `WWW-Authenticate` header). The TCP connection itself is accepted normally — the refusal happens at the application layer. With the correct header: HTTP 200 carrying the `initialize` `result`.
 
 ---
 

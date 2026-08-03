@@ -123,7 +123,7 @@ GUI nativa em Rust (`egui`/`eframe`, sem Chromium ou WebView), bilíngue **PT-BR
 | :--- | :--- |
 | **MCP & Rede** | Configuração da porta HTTP do servidor MCP (`CUA_DRIVER_RS_MCP_HTTP_PORT`), regra Windows PortProxy (netsh) apontando para a porta CUA confirmada, teste real do endpoint `/mcp` via TCP, URL de rede com IP LAN autodetectado, botão **Verificar e Atualizar** (GitHub Releases com auto-installer), **Iniciar com o Windows** (autostart) e **Console Debug** deduplicado com rolagem automática. |
 | **MCP Tools** | **[NOVO v2.0.0]** Catálogo visual completo para listar, filtrar por categoria e invocar interativamente qualquer ferramenta MCP do motor CUA. |
-| **Túnel (Internet)** | **[NOVO v2.1.0]** Expõe o MCP HTTP local na internet (HTTPS público -> HTTP local) por **Cloudflare Tunnel** (quick + nomeado via login OAuth/token), **ngrok** e **SSH reverso** (servidor próprio ou localhost.run/serveo). Captura a URL pública, gera o snippet `mcpServers` e testa de verdade por POST `initialize` na URL pública (sonda de exposição). Autenticação **nível 1 = senha na URL** via porteiro local (`/s/<senha>/mcp`). Ciclo de vida limpo: o túnel nunca sobrevive ao app. **O MCP não tem autenticação própria — leia o aviso da aba.** |
+| **Túnel (Internet)** | **[NOVO v2.1.0]** Expõe o MCP HTTP local na internet (HTTPS público -> HTTP local) por **Cloudflare Tunnel** (quick + nomeado via login OAuth/token), **ngrok** e **SSH reverso** (servidor próprio ou localhost.run/serveo). Captura a URL pública, gera o snippet `mcpServers` e testa de verdade por POST `initialize` na URL pública (sonda de exposição). Autenticação **nível 1 = senha na URL** via porteiro local (`/s/<senha>/mcp`). Ciclo de vida limpo: o túnel nunca sobrevive ao app. **O motor tem autenticação própria — medido em 2026-08-03 no `cua-driver` 0.17.0: toda requisição sem `Authorization: Bearer <token>` recebe HTTP 401 `{"code":-32001,"message":"Authentication required"}`. A senha na URL é uma camada adicional na borda, não substituta do token.** |
 | **Calibração & Visão** | Calibração de tela, DPI scaling e teste de clique por coordenadas. |
 | **Janelas & Processos** | Listagem de janelas ativas, inspeção UIA e lançamento de aplicativos. |
 | **Gravação Trajetória** | Início e parada de gravações de sessão/trajetória. |
@@ -166,14 +166,22 @@ Além do modo local `stdio`, o servidor suporta conexão remota via protocolo **
 ```powershell
 # Ativar porta TCP 8000 para o servidor MCP
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
+# Token obrigatório: qualquer string aleatória gerada por você
+# (o próprio motor a chama de "host-generated bearer token" — não existe comando que a gere)
+[Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_TOKEN', '<seu-token>', 'User')
 cua-driver stop
 cua-driver autostart kick
 ```
+
+> **Medido em 2026-08-03 no binário `cua-driver` 0.17.0** (execução real, não citação de documentação): sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do processo, o `cua-driver serve` **nem sobe** — sai com código 1 e a mensagem `CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`.
+>
+> Atenção ao autostart: a Scheduled Task `cua-driver-serve` (usada por `autostart kick`) **herda o ambiente do logon**, então um token gravado depois de você logar só é enxergado no próximo logon — até lá o daemon sobe sem token, morre na hora e a porta fica muda. A GUI v2.1.0 contorna isso: quando o kick não abre a porta, ela lê porta e token do registro, para o daemon anterior e lança o `serve` com as variáveis injetadas no processo filho (só pode existir **um** daemon por vez).
 
 ### Configurando o Cliente HTTP / Orquestrador:
 - **Endpoint**: `http://<IP_DO_WINDOWS>:8000/mcp`
 - **Método**: `POST`
 - **Header**: `Content-Type: application/json`
+- **Header**: `Authorization: Bearer <seu-token>` — **obrigatório**. Medido em 2026-08-03: sem ele, `POST /mcp`, `GET /mcp` e `GET /` respondem os três o mesmo HTTP 401 com `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` (e **sem** header `WWW-Authenticate`). A conexão TCP em si é aceita normalmente — a recusa acontece na camada de aplicação. Com o header correto: HTTP 200 com o `result` do `initialize`.
 
 ---
 
