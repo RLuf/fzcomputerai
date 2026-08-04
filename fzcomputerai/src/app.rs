@@ -666,14 +666,17 @@ impl AppState {
         // sem listener = SEM EFEITO (IP Helper nao subiu o listener).
         #[cfg(target_os = "windows")]
         {
-            let exists = if lan_is_loopback {
-                false
-            } else {
-                self.portproxy_rule_exists(&lan_ip, &port.to_string())
-            };
+            // O encaminhamento pode vir de DOIS lugares: a thread do próprio
+            // app (caminho normal desde a v2.1.1) ou uma regra netsh (fallback).
+            // Olhar só o netsh fazia o badge dizer "SEM REGRA" com o
+            // encaminhamento do app ATIVO e o console logo abaixo confirmando
+            // LISTENING nos dois IPs — a GUI desmentindo a si mesma.
+            let by_app = self.lan_forward_addr.is_some();
+            let exists = by_app
+                || (!lan_is_loopback && self.portproxy_rule_exists(&lan_ip, &port.to_string()));
             self.portproxy_active = exists;
             self.portproxy_effective = exists && netstat_lan;
-            if exists && !netstat_lan {
+            if exists && !netstat_lan && !by_app {
                 self.log_debug(
                     "[portproxy] Regra existe na config do netsh mas o listener NAO esta de pe — SEM EFEITO. Reinicie o servico IP Helper (iphlpsvc) ou remova e reaplique a regra.",
                 );
