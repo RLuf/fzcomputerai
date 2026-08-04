@@ -30,7 +30,7 @@ Por que o motor entra aqui: enquanto o botão olhava apenas a GUI, o motor podia
    - encerra também o `cua-driver`;
    - executa o instalador com `/VERYSILENT /NORESTART`;
    - reabre a GUI (`%LOCALAPPDATA%\Programs\FzComputerAI\fzcomputerai.exe`, com fallback para o caminho do executável anterior);
-   - religa o motor com `cua-driver autostart kick`.
+   - religa o motor com `cua-driver autostart kick` — aqui quem chama é o **processo auxiliar do update**, não a GUI. Com a GUI aberta, quem sobe o motor é ela própria, como processo filho (seção 4).
 
 Nada de "instalar por cima" com o app aberto. Se você escolher **Depois**, o instalador fica em `%TEMP%` e o diálogo volta na próxima verificação.
 
@@ -63,14 +63,16 @@ Isto foi **medido no binário `cua-driver` 0.17.0 em 2026-08-03** — não é ma
 - **Sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do processo, o daemon nem sobe:** `cua-driver serve` sai com código 1 e o erro `CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`. A porta simplesmente não abre.
 - **Com o daemon no ar, requisição sem `Authorization: Bearer <token>` recebe 401**, corpo `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` — igual em `POST /mcp`, `GET /mcp` e `GET /`, e sem header `WWW-Authenticate`. Com o header correto, **200** e o `result` do `initialize`.
 
-O token é **gerado por você**: qualquer string aleatória serve — o próprio motor a chama de *host-generated bearer token*. Não há comando no `cua-driver` nem no instalador oficial do Cua que gere um. Versões antigas (como a **0.8.3**) não têm token nenhum.
+O motor chama esse valor de *host-generated bearer token* — o **host é este app**. Não há comando no `cua-driver` nem no instalador oficial do Cua que gere um, então, desde a GUI **v2.1.1**, quem gera é a própria GUI: 32 bytes do RNG do Windows (64 caracteres hex), persistidos em `HKCU\Environment` na primeira vez que o motor precisa deles. Você não precisa saber que a variável existe. Versões antigas do motor (como a **0.8.3**) não têm token nenhum.
 
 Consequências práticas depois de atualizar o motor:
 
-- se você **não** configurar o token, não é "o endpoint responde 401": o daemon morre ao subir e a aba MCP & Rede mostrará **PARADO** — corretamente, porque o teste é um POST real e não há ninguém escutando;
-- **grave o token em `HKCU\Environment` (`setx`) e considere o logon.** A Scheduled Task que sobe o daemon herda o ambiente do **logon**: token gravado depois de você logar só é enxergado por ela no próximo. Desde a GUI **v2.1.0**, quando o `autostart kick` não abre a porta, a GUI lê porta e token do registro, para o daemon anterior e lança o `serve` com as variáveis injetadas no processo filho — que é o que destrava o caso "task rodou, porta muda";
-- a GUI **lê** o token de `HKCU\Environment` na abertura e passa a enviar o header `Authorization: Bearer` em todos os testes. Ela **não gera nem grava** o token: escolher o segredo é papel de quem opera a máquina;
-- se você configurou o token com o app aberto, **reabra o app** para ele reler a variável;
+- **você não precisa mais criar o token à mão.** Se `CUA_DRIVER_RS_MCP_HTTP_TOKEN` não existir quando o botão Iniciar for usado, a GUI gera e grava. Se você **já** tinha um valor configurado, ele é respeitado — a GUI nunca sobrescreve;
+- a GUI **nunca exibe** o token em log ou na tela; trate-o como senha. Para lê-lo: `reg query HKCU\Environment /v CUA_DRIVER_RS_MCP_HTTP_TOKEN`;
+- **quem sobe o daemon é a GUI, não o Agendador de Tarefas.** Desde a v2.1.1 o botão Iniciar lança `cua-driver serve` como **processo filho** da GUI, com porta e token injetados no ambiente do processo — por isso o caso clássico "a task rodou e a porta ficou muda" (a Scheduled Task herda o ambiente do **logon** e não vê o que foi gravado depois) não afeta mais o caminho normal. O `autostart kick` ficou como **último recurso**, e nesse caso o console avisa que o processo não é da GUI e que não haverá logs dele;
+- como o motor virou processo filho, o `stdout`+`stderr` dele vão para `%TEMP%\fzcomputerai-update\cua-driver-serve.log` e o console os acompanha como um `tail -f`, com o prefixo `[motor]`. É assim que a atividade de clientes MCP **externos** (conector do Claude, Antigravity, Cursor) passou a aparecer — antes o stdout pertencia à task e sumia;
+- **Iniciar não derruba mais um daemon saudável.** Antes o botão parava o motor e subia outro sem checar se o endpoint já respondia; no Windows o socket da porta fica retido em `TIME_WAIT` por minutos depois de ter tido conexão, então o `serve` novo não conseguia o bind (`MCP HTTP transport disabled — bind 127.0.0.1:8000 failed (os error 10048)`) e o resultado era um daemon zumbi: pipe vivo, porta muda. Hoje, com o endpoint respondendo, o botão não encosta; para forçar troca de processo, use **Reiniciar**;
+- a GUI **lê** o token na abertura e envia o header `Authorization: Bearer` em todos os testes. Se você trocou o valor com o app aberto, **reabra o app** para ele reler a variável;
 - clientes MCP que já estavam conectados precisam passar a enviar o header. Snippets antigos sem `Authorization` deixam de funcionar.
 
 A própria Central de Atualizações mostra esse aviso ao lado do botão do motor, e traz o link para as notas da versão quando o motor informa a URL.
@@ -79,7 +81,7 @@ A própria Central de Atualizações mostra esse aviso ao lado do botão do moto
 
 | Caminho | Conteúdo |
 | --- | --- |
-| `%TEMP%\fzcomputerai-update\` | instalador baixado, `.sha256`, `ready.flag` / `error.flag` (GUI) e `drv-ready.flag` / `drv-error.flag` (motor) |
+| `%TEMP%\fzcomputerai-update\` | instalador baixado, `.sha256`, `ready.flag` / `error.flag` (GUI), `drv-ready.flag` / `drv-error.flag` (motor) e `cua-driver-serve.log` — o `stdout`+`stderr` do daemon lançado pela GUI, que o console segue com o prefixo `[motor]` |
 | `%LOCALAPPDATA%\Programs\FzComputerAI\` | destino padrão da instalação por usuário (o `.iss` usa `{autopf}` com `PrivilegesRequired=lowest`) |
 
 ## 6. Instalação e atualização manual
@@ -97,6 +99,8 @@ Get-Content .\fzcomputerai-setup-windows-x64.exe.sha256
 
 - o passo do motor roda **também em instalação silenciosa** (`/VERYSILENT`, que é o caminho do auto-upgrade da GUI) — porém com `-NoAutoStart`: registrar a Scheduled Task do daemon exige admin, e um UAC numa instalação desassistida travaria o processo esperando um clique que ninguém vai dar. Para deploy em massa sem rede ou com motor provisionado à parte, use `/SKIPENGINE`;
 - falha nessa etapa **não derruba** a instalação da GUI — o passo roda após a cópia dos arquivos (`ssPostInstall`), e o resultado é que você fica com a interface funcionando e sem controle da máquina, o que o aviso do próprio instalador explica.
+
+**O pacote de skills passou a ser instalado pelo setup.** No fim da instalação, o instalador executa `cua-driver skills install`. Sem esses links, o agente conecta no MCP e **não enxerga ferramenta nenhuma** — e quem acabou de instalar não tem como adivinhar que precisa clicar num botão na aba Doctor & Skills. O comando é idempotente e, pelo help oficial do motor, *"Never overwrites existing user links"*: o que você já tinha configurado fica intacto. Verificado apagando os links e conferindo o setup recriar os quatro (Claude Code, Codex, Antigravity, Hermes).
 
 **Assinatura.** Os binários publicados **não são assinados**: o SmartScreen do Windows vai avisar. O motivo, as alternativas e o procedimento estão em [`SIGNING.md`](../SIGNING.md). A verificação de integridade disponível é o `.sha256` de cada artefato — e é exatamente o que o auto-upgrade confere antes de executar qualquer coisa.
 

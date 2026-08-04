@@ -49,16 +49,16 @@
 
 | Feature | What it does |
 | :--- | :--- |
-| **Engine lifecycle** | Start, stop and restart `cua-driver` in one click, with Windows autostart. Closing the app shuts the engine down and undoes temporary configuration. |
+| **Engine lifecycle** | The GUI **owns** the daemon: it launches `cua-driver serve` as a **child process**, with port and token injected into its environment, and the engine's `stdout`/`stderr` go to `%TEMP%\fzcomputerai-update\cua-driver-serve.log`, which the console follows like `tail -f` (prefix `[motor]`). **Start** never tears down an engine that already answers — use **Restart** to force a process swap. Closing the app shuts the engine down and undoes temporary configuration through short native calls, with no PowerShell and no elevation. |
 | **Honest status** | Nothing is assumed: the check is a real JSON-RPC `POST initialize`, and the LAN green badge only appears with a listener confirmed in `netstat` **and** the endpoint answering. |
-| **LAN access** | `netsh portproxy` forwarding applied by the app (elevating only when needed), a **3-state** badge (working / no effect / no rule) and tracked cleanup — it removes only the rules it created itself. |
+| **LAN access** | Forwarding done **by the app itself**: a thread inside the process listens on `<lan_ip>:port` and copies bytes against `127.0.0.1:port`. It is plain TCP — `curl`, `telnet` and `nc` go through just the same. No admin/UAC prompt and no leftovers: closing the app closes both ports with it. `netsh portproxy` remains **only as a fallback**, for when binding on the LAN IP fails — in that case the **3-state** badge (working / no effect / no rule) and the tracked cleanup apply, removing only the rules the app created itself. |
 | **Internet access** | **Tunnel** tab: Cloudflare Tunnel (quick or named), ngrok and reverse SSH. **Outbound** tunnel — no router port forwarding required. |
 | **URL password** | Level-1 authentication through a local gate: the URL becomes `https://…/s/<password>/mcp`, and without the password requests get a 404. |
 | **Exposure probe** | The app tests the **public URL** with a credential-less request and reports the verified result — exposed, blocked at the edge, or not verifiable. |
 | **Tunnel never outlives the app** | Four cleanup layers (including a watchdog that acts on `taskkill /F` and crashes), killing only the process provably ours. |
 | **Update Center** | Checks and updates **two** components: this interface (installer downloaded in the background with verified SHA256 — only the final swap asks for confirmation) and the **engine** (end-to-end automatic update through its own official API, `check-update` / `update --apply`, with fallback to the official Cua installer). |
 | **MCP Tools catalog** | List, filter and run the vision and automation tools without leaving the interface. |
-| **Single console** | One global console at the bottom, visible in every section, scrolling like `tail -f`: it follows on its own and pauses when you scroll up to read. |
+| **Single console** | One global console at the bottom, visible in every section, scrolling like `tail -f`: it follows on its own, pauses when you scroll up to read, and resumes following on the **Jump to end** button. |
 | **Bilingual and native** | PT-BR / English in real time. Rust + `egui`, no Chromium, no WebView, no Node runtime. |
 
 ---
@@ -121,7 +121,7 @@ Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / E
 
 | Tab | Purpose |
 | :--- | :--- |
-| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), Windows PortProxy rule (netsh) connecting to confirmed CUA port, real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check & Update** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
+| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), LAN forwarding performed by the app itself (`netsh portproxy` only as a fallback), real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check & Update** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
 | **MCP Tools** | **[NEW v2.0.0]** Interactive visual catalog to list, filter by category, and run any MCP vision & automation tool directly. |
 | **Tunnel (Internet)** | **[NEW v2.1.0]** Exposes the local MCP HTTP endpoint to the internet (public HTTPS -> local HTTP) via **Cloudflare Tunnel** (quick + named, OAuth login/token), **ngrok**, and **reverse SSH** (own server or localhost.run/serveo). Captures the public URL, builds the `mcpServers` snippet, and truly tests it with a `POST initialize` exposure probe. Level-1 authentication = **URL password** through a local gate (`/s/<password>/mcp`). Clean lifecycle: the tunnel never outlives the app. **The engine does have authentication of its own — measured on 2026-08-03 against `cua-driver` 0.17.0: every request without `Authorization: Bearer <token>` gets HTTP 401 `{"code":-32001,"message":"Authentication required"}`. The URL password is an extra layer at the edge, not a replacement for the token.** |
 | **Calibration & Vision** | Screen calibration, DPI scaling, and coordinate click testing. |
@@ -167,15 +167,26 @@ In addition to local `stdio` mode, the server supports remote connections via th
 # Set TCP port 8000 for the MCP server
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
 # Mandatory token: any random string you generate yourself
-# (the engine itself calls it a "host-generated bearer token" — no command generates it for you)
+# (the engine itself calls it a "host-generated bearer token" — the host is what generates it;
+#  if you use the GUI, it does this for you — see the note below)
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_TOKEN', '<your-token>', 'User')
 cua-driver stop
-cua-driver autostart kick
+# Start the engine with the variables already in effect in THIS process environment
+$env:CUA_DRIVER_RS_MCP_HTTP_PORT = '8000'
+$env:CUA_DRIVER_RS_MCP_HTTP_TOKEN = '<your-token>'
+cua-driver serve
 ```
 
 > **Measured on 2026-08-03 against the `cua-driver` 0.17.0 binary** (an actual run, not documentation quoting documentation): without `CUA_DRIVER_RS_MCP_HTTP_TOKEN` in the process environment, `cua-driver serve` **does not even start** — it exits with code 1 and the message `CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`.
 >
-> Watch out for autostart: the `cua-driver-serve` Scheduled Task (used by `autostart kick`) **inherits the logon environment**, so a token written after you logged in is only seen at the next logon — until then the daemon starts without a token, dies immediately and leaves the port silent. The v2.1.0 GUI works around this: when the kick does not open the port, it reads port and token from the registry, stops the previous daemon and launches `serve` with the variables injected into the child process (only **one** daemon may exist at a time).
+> Watch out for autostart: the `cua-driver-serve` Scheduled Task (used by `autostart kick`) **inherits the logon environment**, so a token written after you logged in is only seen at the next logon — until then the daemon starts without a token, dies immediately and leaves the port silent. And because the process is born as a child of the **Task Scheduler**, its `stdout` belongs to the task: the engine's logs — including activity from external MCP clients such as the Claude connector, Antigravity and Cursor — simply vanish.
+>
+> That is why the GUI **no longer uses** `autostart kick` to bring the engine up: it launches `cua-driver serve` as a **child process**, with port and token injected into its environment, and redirects `stdout`+`stderr` to `%TEMP%\fzcomputerai-update\cua-driver-serve.log`, which the console follows like `tail -f` (prefix `[motor]`). The Scheduled Task is kept as a **last resort**, and in that case the console warns you that the process is not the GUI's and that there will be no logs. Only **one** daemon may exist at a time — and if the endpoint already answers, the **Start** button does not touch it: on Windows a recently used port stays held in `TIME_WAIT` for minutes, a fresh `serve` would lose the bind (`MCP HTTP transport disabled — bind 127.0.0.1:8000 failed (os error 10048)`) and you would be left with a zombie daemon (live pipe, silent port). To force a process swap, use **Restart**.
+>
+> **You do not have to create the token:** the first time it needs one, the GUI generates 32 bytes from the Windows RNG (64 hex characters) and persists it in `HKCU\Environment`. The value never shows up in the log; to read it:
+> ```powershell
+> reg query HKCU\Environment /v CUA_DRIVER_RS_MCP_HTTP_TOKEN
+> ```
 
 ### Configuring the HTTP Client / Orchestrator:
 - **Endpoint**: `http://<WINDOWS_IP>:8000/mcp`
@@ -197,6 +208,7 @@ The installer (Inno Setup, bilingual PT-BR / English) does the following:
 - **Creates a Start Menu shortcut** and, optionally, a Desktop shortcut.
 - **"Start FzComputerAI with Windows" option** (autostart) — writes exactly the same `HKCU\...\Run` key used by the checkbox on the *MCP & Network* tab, so the GUI and the installer never contradict each other.
 - **"Install the `cua-driver` engine" option** (unchecked by default, requires internet) — runs the **official** cua project installer, which installs the **latest stable** release.
+- **Installs the skills bundle** at the end of the installation (`cua-driver skills install`). Without those symlinks the agent connects to the MCP server and **sees no tools at all** — and someone who just installed the app has no way of guessing they must click a button on the *Doctor & Skills* tab. It is idempotent and, per the engine's own official help, *"Never overwrites existing user links"*; the four targets are Claude Code, Codex, Antigravity and Hermes.
 - **Registers an uninstaller** under *Settings → Apps → Installed apps*. It removes the GUI; `cua-driver` has its own lifecycle and is **not** removed along with it (the uninstaller says so on screen).
 
 > ⚠️ **SmartScreen warning — read before running**

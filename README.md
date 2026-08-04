@@ -49,16 +49,16 @@
 
 | Recurso | O que faz |
 | :--- | :--- |
-| **Ciclo de vida do motor** | Iniciar, parar e reiniciar o `cua-driver` em um clique, com autostart no Windows. Ao fechar o app, o motor é encerrado e a configuração temporária desfeita. |
+| **Ciclo de vida do motor** | A GUI é **dona** do daemon: lança o `cua-driver serve` como **processo filho**, com porta e token injetados no ambiente, e o `stdout`/`stderr` do motor vai para `%TEMP%\fzcomputerai-update\cua-driver-serve.log`, que o console segue como `tail -f` (prefixo `[motor]`). **Iniciar** não derruba um motor que já responde — para trocar de processo existe **Reiniciar**. Ao fechar o app, o motor é encerrado e a configuração temporária desfeita por chamadas nativas curtas, sem PowerShell e sem elevação. |
 | **Status honesto** | Nenhum estado é presumido: o teste é um `POST initialize` JSON-RPC de verdade, e o verde de LAN só aparece com listener confirmado no `netstat` **e** resposta do endpoint. |
-| **Acesso pela LAN** | Encaminhamento `netsh portproxy` aplicado pelo app (com elevação quando necessária), badge de **3 estados** (funcionando / sem efeito / sem regra) e limpeza rastreada — só remove as regras que ele mesmo criou. |
+| **Acesso pela LAN** | Encaminhamento feito **pelo próprio app**: uma thread do processo escuta em `<ip_lan>:porta` e copia os bytes contra `127.0.0.1:porta`. É TCP puro — `curl`, `telnet` e `nc` atravessam igual. Não pede admin/UAC e não deixa resíduo: ao fechar o app as duas portas fecham junto. O `netsh portproxy` continua **apenas como fallback**, quando o bind no IP da LAN falha — nesse caso valem o badge de **3 estados** (funcionando / sem efeito / sem regra) e a limpeza rastreada, que só remove as regras criadas pelo app. |
 | **Acesso pela internet** | Aba **Túnel**: Cloudflare Tunnel (quick ou nomeado), ngrok e SSH reverso. Túnel de **saída** — não precisa abrir porta no roteador. |
 | **Senha na URL** | Autenticação nível 1 por um porteiro local: a URL vira `https://…/s/<senha>/mcp` e sem a senha o acesso recebe 404. |
 | **Sonda de exposição** | O app testa a **URL pública** com uma requisição sem credencial e mostra o resultado verificado — exposto, barrado pela borda, ou não verificável. |
 | **Túnel não sobrevive ao app** | Quatro camadas de limpeza (incluindo watchdog que age em `taskkill /F` e crash), matando apenas o processo comprovadamente nosso. |
 | **Central de Atualizações** | Verifica e atualiza **dois** componentes: esta interface (instalador baixado em segundo plano com SHA256 conferido — só a troca final pede confirmação) e o **motor** (atualização automática de ponta a ponta pela API oficial dele, `check-update` / `update --apply`, com fallback para o instalador oficial do Cua). |
 | **Catálogo MCP Tools** | Lista, filtra e executa as ferramentas de visão e automação sem sair da interface. |
-| **Console único** | Um console global no rodapé, visível em todas as seções, rolando como `tail -f`: acompanha sozinho e pausa quando você rola para ler. |
+| **Console único** | Um console global no rodapé, visível em todas as seções, rolando como `tail -f`: acompanha sozinho, pausa quando você rola para ler e volta a acompanhar no botão **Ir ao fim**. |
 | **Bilíngue e nativo** | PT-BR / English em tempo real. Rust + `egui`, sem Chromium, sem WebView, sem runtime Node. |
 
 ---
@@ -121,7 +121,7 @@ GUI nativa em Rust (`egui`/`eframe`, sem Chromium ou WebView), bilíngue **PT-BR
 
 | Aba | Função |
 | :--- | :--- |
-| **MCP & Rede** | Configuração da porta HTTP do servidor MCP (`CUA_DRIVER_RS_MCP_HTTP_PORT`), regra Windows PortProxy (netsh) apontando para a porta CUA confirmada, teste real do endpoint `/mcp` via TCP, URL de rede com IP LAN autodetectado, botão **Verificar e Atualizar** (GitHub Releases com auto-installer), **Iniciar com o Windows** (autostart) e **Console Debug** deduplicado com rolagem automática. |
+| **MCP & Rede** | Configuração da porta HTTP do servidor MCP (`CUA_DRIVER_RS_MCP_HTTP_PORT`), encaminhamento LAN feito pelo próprio app (`netsh portproxy` só como fallback), teste real do endpoint `/mcp` via TCP, URL de rede com IP LAN autodetectado, botão **Verificar e Atualizar** (GitHub Releases com auto-installer), **Iniciar com o Windows** (autostart) e **Console Debug** deduplicado com rolagem automática. |
 | **MCP Tools** | **[NOVO v2.0.0]** Catálogo visual completo para listar, filtrar por categoria e invocar interativamente qualquer ferramenta MCP do motor CUA. |
 | **Túnel (Internet)** | **[NOVO v2.1.0]** Expõe o MCP HTTP local na internet (HTTPS público -> HTTP local) por **Cloudflare Tunnel** (quick + nomeado via login OAuth/token), **ngrok** e **SSH reverso** (servidor próprio ou localhost.run/serveo). Captura a URL pública, gera o snippet `mcpServers` e testa de verdade por POST `initialize` na URL pública (sonda de exposição). Autenticação **nível 1 = senha na URL** via porteiro local (`/s/<senha>/mcp`). Ciclo de vida limpo: o túnel nunca sobrevive ao app. **O motor tem autenticação própria — medido em 2026-08-03 no `cua-driver` 0.17.0: toda requisição sem `Authorization: Bearer <token>` recebe HTTP 401 `{"code":-32001,"message":"Authentication required"}`. A senha na URL é uma camada adicional na borda, não substituta do token.** |
 | **Calibração & Visão** | Calibração de tela, DPI scaling e teste de clique por coordenadas. |
@@ -167,15 +167,26 @@ Além do modo local `stdio`, o servidor suporta conexão remota via protocolo **
 # Ativar porta TCP 8000 para o servidor MCP
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
 # Token obrigatório: qualquer string aleatória gerada por você
-# (o próprio motor a chama de "host-generated bearer token" — não existe comando que a gere)
+# (o próprio motor a chama de "host-generated bearer token" — quem gera é o host;
+#  usando a GUI, ela faz isso por você — veja a nota abaixo)
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_TOKEN', '<seu-token>', 'User')
 cua-driver stop
-cua-driver autostart kick
+# Suba o motor com as variáveis já valendo no ambiente DESTE processo
+$env:CUA_DRIVER_RS_MCP_HTTP_PORT = '8000'
+$env:CUA_DRIVER_RS_MCP_HTTP_TOKEN = '<seu-token>'
+cua-driver serve
 ```
 
 > **Medido em 2026-08-03 no binário `cua-driver` 0.17.0** (execução real, não citação de documentação): sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do processo, o `cua-driver serve` **nem sobe** — sai com código 1 e a mensagem `CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`.
 >
-> Atenção ao autostart: a Scheduled Task `cua-driver-serve` (usada por `autostart kick`) **herda o ambiente do logon**, então um token gravado depois de você logar só é enxergado no próximo logon — até lá o daemon sobe sem token, morre na hora e a porta fica muda. A GUI v2.1.0 contorna isso: quando o kick não abre a porta, ela lê porta e token do registro, para o daemon anterior e lança o `serve` com as variáveis injetadas no processo filho (só pode existir **um** daemon por vez).
+> Atenção ao autostart: a Scheduled Task `cua-driver-serve` (usada por `autostart kick`) **herda o ambiente do logon**, então um token gravado depois de você logar só é enxergado no próximo logon — até lá o daemon sobe sem token, morre na hora e a porta fica muda. E como o processo nasce filho do **Agendador de Tarefas**, o `stdout` pertence à task: os logs do motor — inclusive a atividade de clientes MCP externos, como o conector do Claude, o Antigravity e o Cursor — simplesmente somem.
+>
+> Por isso a GUI **não usa mais** o `autostart kick` para subir o motor: ela lança o `cua-driver serve` como **processo filho**, com porta e token injetados no ambiente, e manda `stdout`+`stderr` para `%TEMP%\fzcomputerai-update\cua-driver-serve.log`, que o console segue como `tail -f` (prefixo `[motor]`). A Scheduled Task fica como **último recurso**, e nesse caso o console avisa que o processo não é da GUI e que não haverá logs. Só pode existir **um** daemon por vez — e se o endpoint já responde, o botão **Iniciar** não encosta nele: no Windows a porta recém-usada fica retida em `TIME_WAIT` por minutos, um `serve` novo perderia o bind (`MCP HTTP transport disabled — bind 127.0.0.1:8000 failed (os error 10048)`) e sobraria um daemon zumbi (pipe vivo, porta muda). Para forçar a troca de processo, use **Reiniciar**.
+>
+> **O token você não precisa criar:** na primeira vez que precisa dele, a GUI gera 32 bytes do RNG do Windows (64 caracteres hex) e persiste em `HKCU\Environment`. O valor nunca aparece no log; para lê-lo:
+> ```powershell
+> reg query HKCU\Environment /v CUA_DRIVER_RS_MCP_HTTP_TOKEN
+> ```
 
 ### Configurando o Cliente HTTP / Orquestrador:
 - **Endpoint**: `http://<IP_DO_WINDOWS>:8000/mcp`
@@ -197,6 +208,7 @@ O instalador (Inno Setup, bilíngue PT-BR / English) faz:
 - **Cria atalho** no Menu Iniciar e, opcionalmente, na Área de Trabalho.
 - **Opção "Iniciar o FzComputerAI com o Windows"** (autostart) — grava exatamente a mesma chave `HKCU\...\Run` usada pelo checkbox da aba *MCP & Rede*, de modo que GUI e instalador nunca se contradizem.
 - **Opção "Instalar o motor `cua-driver`"** (desmarcada por padrão, requer internet) — executa o instalador **oficial** do projeto cua, que instala a **última versão estável** publicada.
+- **Instala o pacote de skills** ao final da instalação (`cua-driver skills install`). Sem esses symlinks o agente conecta no MCP e **não enxerga ferramenta nenhuma** — e quem acabou de instalar não teria como adivinhar que precisa clicar num botão da aba *Doctor & Skills*. É idempotente e, pelo help oficial do motor, *"Never overwrites existing user links"*; os quatro alvos são Claude Code, Codex, Antigravity e Hermes.
 - **Registra um desinstalador** em *Configurações → Aplicativos → Aplicativos instalados*. Ele remove a GUI; o `cua-driver` tem ciclo de vida próprio e **não** é removido junto (o desinstalador avisa isso na tela).
 
 > ⚠️ **Aviso do SmartScreen — leia antes de executar**

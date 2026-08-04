@@ -7,6 +7,43 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [2.1.1] - 2026-08-03
+
+> Versão que nasceu de um dia inteiro de teste na máquina real. Tudo abaixo foi
+> **medido**, não deduzido — e três dos itens são correção de código nosso que o
+> teste expôs.
+
+### Alterado (o app passou a ser dono do que ele gerencia)
+- **Encaminhamento LAN é feito pelo PRÓPRIO APP, não mais por `netsh interface portproxy`.** Uma thread do processo escuta em `<ip_lan>:porta` e copia bytes contra `127.0.0.1:porta` (`std::net::TcpListener` + `std::io::copy` — **zero dependência nova**). É TCP puro: `curl`, `telnet` e `nc` atravessam igual. Motivos medidos para a troca: o portproxy é regra **estática do IP Helper** — exigia admin/UAC, continuava `LISTENING` na LAN **mesmo com o motor morto** (aceitando conexões que morriam no destino) e **sobrevivia ao fechamento do app e ao reboot**, o que obrigava uma rotina de limpeza. O `netsh` ficou apenas como *fallback*, quando o bind no IP da LAN falha.
+- **A GUI virou dona do daemon.** `start_daemon` chamava `cua-driver autostart kick`, então quem subia o motor era a Scheduled Task e o processo nascia filho do **Agendador de Tarefas**. Três consequências observadas: (1) o `stdout` do motor pertencia à task e **se perdia** — a atividade de clientes MCP externos (conector do Claude, Antigravity, Cursor) não aparecia no console; (2) a task herda o ambiente do **logon**, então porta e token gravados depois de logar não eram vistos e o daemon 0.16+ morria no ato; (3) a GUI não controlava o ciclo de vida do que gerencia. Agora ela lança `serve` como **processo filho**, com porta e token injetados, e o `stdout`+`stderr` vão para `%TEMP%\fzcomputerai-update\cua-driver-serve.log`, que o console segue como `tail -f` (prefixo `[motor]`).
+- **Token do endpoint gerado pela própria GUI.** O motor 0.16+ chama o valor de *host-generated bearer token* — o host é o app. A GUI gera 32 bytes do RNG do Windows (64 chars hex) e persiste em `HKCU\Environment` na primeira vez que precisa; o valor nunca vai para o log. Sem isso, o produto ficava "PARADO" para sempre até alguém descobrir sozinho que precisava criar uma variável de ambiente.
+- **Pacote de skills instalado pelo setup.** `cua-driver skills install` passou a rodar no fim da instalação: sem os symlinks, o agente conecta no MCP e **não enxerga ferramenta nenhuma** — e quem acabou de instalar não tem como saber que precisa clicar num botão na aba Doctor & Skills. Verificado apagando os links e vendo o setup recriar os quatro (Claude Code, Codex, Antigravity, Hermes).
+
+### Corrigido (bugs que o teste na máquina expôs)
+- **"Iniciar" derrubava um daemon saudável — era o que quebrava tudo.** A função parava o motor e subia outro **sem checar se o endpoint já respondia**. No Windows, sockets da porta que já tiveram conexão ficam retidos em `TIME_WAIT` por minutos, então o `serve` novo não conseguia o bind: `MCP HTTP transport disabled — bind 127.0.0.1:8000 failed (os error 10048)`, virando daemon **zumbi** (pipe vivo, porta muda). Agora, com o endpoint respondendo, o botão não encosta; **Reiniciar** continua forçando a troca de processo.
+- **Limpeza ao fechar virou Rust nativo — o Defender flagrou a versão anterior.** O `shutdown_cleanup` disparava um `powershell -WindowStyle Hidden` de ~2 KB que esperava o processo morrer, matava processos, escrevia no registro, rodava `netsh` e chamava `-Verb RunAs`. O Microsoft Defender marcou **exatamente essa linha de comando** nesta máquina (detecção `2147941383`, 2026-08-03 19:19) — e com razão: é o retrato de script oculto + kill + persistência + elevação. Agora são chamadas diretas e curtas, sem elevação e sem PowerShell.
+- **`taskkill /F /IM cua-driver.exe` removido do app e do instalador.** Matava **todo** processo com esse nome na máquina, inclusive um motor que o usuário rodasse para outro fim — a mesma prática que o `AGENTS.md` já proibia para os binários de túnel. Agora: `cua-driver stop` (o comando oficial da CLI) e, se sobrar processo, kill **por PID com o caminho do executável conferido**.
+- **Botão "Ir ao fim" do console não funcionava.** O clique setava `console_follow = true`, mas a detecção de posição do scroll, no **mesmo frame**, sobrescrevia o valor com a posição **antiga** — o clique era anulado antes de surtir efeito. Agora o salto tem precedência.
+- **Badge do Encaminhamento LAN dizia "SEM REGRA" com o encaminhamento ativo**, porque lia apenas o `netsh`, enquanto o console na mesma tela confirmava `LISTENING` nos dois IPs. O estado agora considera as duas origens (thread do app e regra netsh).
+- **Aviso de segurança da aba Túnel deixou de mentir.** O texto de "sem token" afirmava que *"o endpoint aceita qualquer requisição"* — **falso** em motores 0.16+, onde sem token não existe endpoint algum (medido: `serve` falha, `netstat` vazio). O texto agora depende da versão real do motor.
+- **Bug introduzido e corrigido no mesmo dia:** a verificação "a porta está livre?" usava um `TcpListener::bind` de teste — e era **ela** que fazia o motor seguinte falhar com `os error 10048`. Trocada por espera do processo anterior encerrar, sem tocar na porta.
+- **CI:** `cargo install --force` no job Linux — com o cache do runner quente, o `cargo install` abortava com *"binary already exists"* e derrubava o job inteiro, deixando `.deb`/`.rpm`/AppImage fora do release.
+
+### Testado (ciclo completo no artefato publicado, não no build local)
+Desinstalar → instalar (setup baixado do release) → abrir → Iniciar → Aplicar LAN → confirmar IPs → fechar → desinstalar:
+
+| Etapa | Resultado |
+| --- | --- |
+| Instalar | `exit 0`, 17 arquivos, versão `2.1.1.0` |
+| Motor / skills | `VERIFICACAO OK: cua-driver 0.17.0` · `pacote de skills instalado/linkado` |
+| IPs | `127.0.0.1:8000` **HTTP 200** · `192.168.0.101:8000` **HTTP 200** · netsh: **nenhuma regra** |
+| Fechar | app encerrado, **as duas portas fecharam junto**, nada deixado no sistema |
+| Desinstalar | `exit 0`, **0 arquivos**, `Run` ausente, **motor preservado** (design) |
+| Defender | 16 detecções antes e depois — **nenhuma nova** |
+| Release | 16 assets, hashes conferidos após download real |
+
+---
+
 ## [2.1.0] - 2026-08-03
 
 ### Alterado (instalador — motor sempre na última versão)
