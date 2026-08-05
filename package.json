@@ -1,6 +1,6 @@
 {
   "name": "fzcomputerai",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "FzComputerAI — Servidor Nativo de Visão Computacional Multimodal & Automação Desktop para Agentes de IA via MCP & GUI Rust",
   "main": "bin/cli.js",
   "bin": {

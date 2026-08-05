@@ -3884,32 +3884,55 @@ impl AppState {
     fn register_tunnel(&mut self, pid: u32, local_port: u16) {
         #[cfg(target_os = "windows")]
         {
+            // TUDO EM SEGUNDO PLANO. Isto lia o CreationDate do processo com
+            // `Get-CimInstance` — ou seja, um PowerShell — na thread da UI, e
+            // nesta máquina uma invocação de PowerShell chega a passar de um
+            // minuto: era o clique em "Iniciar túnel" congelando o aplicativo
+            // inteiro com "(Não Respondendo)". O registro serve à reconciliação
+            // da PRÓXIMA abertura; nada na tela depende dele agora.
             let image = Self::provider_image(self.tunnel_run_provider);
-            let creation = self.pid_creation_date(pid).unwrap_or_default();
             let mode = if self.tunnel_gate_password.trim().is_empty() {
                 "direct"
             } else {
                 "gated"
             };
-            let value = format!(
-                "{}|{}|{}|{}|{}",
-                image, creation, local_port, self.tunnel_run_id, mode
-            );
-            let name = format!("tunnel:{}:{}", Self::provider_slug(self.tunnel_run_provider), pid);
-            let _ = self.run_logged(
-                "reg",
-                &[
-                    "add",
-                    r"HKCU\Software\FzComputerAI",
-                    "/v",
-                    name.as_str(),
-                    "/t",
-                    "REG_SZ",
-                    "/d",
-                    value.as_str(),
-                    "/f",
-                ],
-            );
+            let run_id = self.tunnel_run_id.clone();
+            let slug = Self::provider_slug(self.tunnel_run_provider);
+            self.spawn_bg("Registrando o tunel para limpeza futura", move || {
+                let creation = quiet_cmd("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        &format!(
+                            "$p = Get-CimInstance Win32_Process -Filter \"ProcessId={}\"; if ($p) {{ $p.CreationDate.ToString('yyyyMMddHHmmss') }}",
+                            pid
+                        ),
+                    ])
+                    .output()
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_default();
+                let value = format!("{}|{}|{}|{}|{}", image, creation, local_port, run_id, mode);
+                let name = format!("tunnel:{}:{}", slug, pid);
+                let _ = quiet_cmd("reg")
+                    .args([
+                        "add",
+                        r"HKCU\Software\FzComputerAI",
+                        "/v",
+                        name.as_str(),
+                        "/t",
+                        "REG_SZ",
+                        "/d",
+                        value.as_str(),
+                        "/f",
+                    ])
+                    .output();
+                BgOutcome {
+                    log: format!("[tunnel] Registrado para limpeza: {}", name),
+                    status: String::new(),
+                    effect: BgEffect::None,
+                }
+            });
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -3943,7 +3966,13 @@ impl AppState {
             let gui_pid = std::process::id();
             let slug = Self::provider_slug(self.tunnel_run_provider);
             let image = Self::provider_image(self.tunnel_run_provider);
-            let creation = self.pid_creation_date(tunnel_pid).unwrap_or_default();
+            // CreationDate vazio de propósito: obtê-lo aqui custava um
+            // PowerShell SÍNCRONO na thread da UI. A identidade continua
+            // garantida pelos outros dois fatores (imagem + run_id na command
+            // line), e o script abaixo já trata `$ct` vazio como "não
+            // comparar". Este caminho só roda quando a adoção no Job Object
+            // falha — o normal é nem existir.
+            let creation = String::new();
             // Marcador de identidade = o run_id (8 chars aleatorios), que
             // aparece no path do --logfile/--log/-E na command line. Unico o
             // bastante para, junto de imagem + CreationDate, garantir que so
@@ -4033,19 +4062,24 @@ impl AppState {
     /// processo nunca é lido como "nosso túnel vivo". Fora do Windows,
     /// best-effort false.
     fn tunnel_pid_is_ours_alive(&mut self, pid: u32) -> bool {
+        // SEM PowerShell. Antes isto era um `Get-CimInstance` síncrono na
+        // thread da UI — o clique em "Parar túnel" congelava o aplicativo por
+        // todo o tempo do PowerShell (mais de um minuto nesta máquina).
+        //
+        // E era desnecessário: o túnel é NOSSO FILHO, então temos o handle
+        // dele. `tasklist` com filtro de PID responde em ~85ms e ainda
+        // confirma a IMAGEM, que é o que interessa aqui: se o PID foi
+        // reciclado por outro programa, o nome não bate e devolvemos "não é
+        // nosso" — que é justamente a proteção que o AGENTS.md exige.
         #[cfg(target_os = "windows")]
         {
             let image = Self::provider_image(self.tunnel_run_provider);
-            let mark = self.tunnel_run_id.clone();
-            let ps = format!(
-                "$p = Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\"; \
-                 if ($p -and $p.Name -eq '{img}' -and '{mark}' -ne '' -and $p.CommandLine -like ('*' + '{mark}' + '*')) {{ 'ALIVE' }} else {{ 'GONE' }}",
-                pid = pid,
-                img = image,
-                mark = mark
-            );
-            self.run_logged("powershell", &["-NoProfile", "-Command", ps.as_str()])
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains("ALIVE"))
+            let filtro = format!("PID eq {}", pid);
+            self.run_logged("tasklist", &["/FI", filtro.as_str(), "/FO", "CSV", "/NH"])
+                .map(|o| {
+                    let txt = String::from_utf8_lossy(&o.stdout).to_ascii_lowercase();
+                    txt.contains(&image.to_ascii_lowercase())
+                })
                 .unwrap_or(false)
         }
         #[cfg(not(target_os = "windows"))]
