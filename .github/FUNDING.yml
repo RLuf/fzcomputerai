@@ -1,0 +1,5 @@
+# Botao "Sponsor" do repositorio (GitHub Sponsors).
+# O botao so aparece depois que o GitHub Sponsors estiver habilitado na conta.
+# Para adicionar outros destinos, descomente e preencha (custom aceita qualquer URL).
+github: RLuf
+# custom: ["https://www.webstorage.com.br"]

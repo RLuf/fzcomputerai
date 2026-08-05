@@ -26,7 +26,32 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - **Spawns de processos SEMPRE via `quiet_cmd(program)`** (helper em `app.rs`): no Windows ele aplica `creation_flags(0x08000000)` (`CREATE_NO_WINDOW`) para não piscar janelas de console. Nunca use `std::process::Command::new` diretamente fora do helper.
 - **Versão SEMPRE via `env!("CARGO_PKG_VERSION")`** (ou `concat!` com ela). Nunca hardcode o número de versão em strings da UI — a fonte da verdade é o `Cargo.toml`.
 - **Todo handler de ação loga no Console Debug**: use `run_logged()` (comando, exit code, stdout, stderr, erros de spawn) ou `log_debug()` para eventos. O painel do Console Debug fica na aba MCP & Rede (limite de 64KB, mantém o final do log).
-- **Status honesto**: estados como `port_active`/`daemon_running` devem refletir verificação real (ex.: teste TCP no endpoint `/mcp`), nunca valores presumidos.
+- **Status honesto**: estados como `port_active`/`daemon_running` devem refletir verificação real (ex.: teste TCP no endpoint `/mcp`), nunca valores presumidos. Na aba Túnel, o badge de exposição só fica verde após a **sonda real** (POST `initialize` na URL pública) — nunca por intenção.
+- **Processos de longa duração (túneis: cloudflared/ngrok/ssh) — ciclo de vida obrigatório**: todo túnel iniciado pela GUI DEVE ser rastreado em `HKCU\Software\FzComputerAI` (`tunnel:<provider>:<pid>` com dado `imagem|CreationDate|porta|run_id|modo`), ser **adotado no Job Object da GUI** (caminho primário: o kernel derruba o túnel junto com o app — medido com `cloudflared`), ter um **watchdog independente como fallback** (disparado apenas quando a adoção no Job falha; mata o túnel se a GUI morrer, inclusive `kill -9`), ser derrubado no `shutdown_cleanup` e reconciliado na abertura (`startup_reconcile_tracked_tunnels`). **Matar processo de túnel SOMENTE com identidade de 3 fatores** (imagem + `CreationDate` + marcador `run_id` único na command line) — **é PROIBIDO `taskkill /IM cloudflared.exe|ngrok.exe|ssh.exe`**, que atingiria processos legítimos de outros usos do usuário. Segredos (token do Cloudflare, authtoken do ngrok) **nunca** em `argv`/log/registro — o `run_logged` loga a command line; use token-file/config nativa do CLI. Não embarque binários de túnel no instalador/release (download sob demanda com hash/Authenticode registrados).
+- **Ciclo de vida do motor — PROIBIDO ressuscitá-lo por tarefa agendada/autostart**: o `cua-driver` usado pelo app é
+  **processo filho da GUI**, iniciado por ela na abertura (quando nada está respondendo na porta) e adotado no
+  **Job Object** do Windows (`fzcomputerai/src/lifecycle.rs`: `CreateJobObjectW` +
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, criado no `main.rs` **antes de qualquer spawn**). Isso é necessário porque no
+  Windows um filho **não** morre com o pai (`CreateProcess` não cria esse vínculo — isso é Unix); com o job, é o
+  **kernel** que derruba os filhos quando a GUI termina de qualquer forma (X, Sair na bandeja, `taskkill /F`, crash,
+  logoff). Portanto: **é proibido chamar `cua-driver autostart kick`** em qualquer caminho executável (botão
+  Reiniciar, fluxo de token, scripts de instalação/atualização do motor) — essas chamadas foram removidas e não devem
+  voltar. **É igualmente proibido matar motor alheio no fechamento**: `taskkill /F /IM cua-driver.exe` e
+  `cua-driver stop` saíram do encerramento (atingiam motor de qualquer origem, inclusive de outro cliente MCP).
+  Motor de terceiro detectado na porta (`engine_external`) **não é duplicado nem encerrado** — a UI avisa que aquele
+  motor não cai com o app, e pará-lo continua sendo ação explícita do botão **Parar**.
+- **PROIBIDO bloquear a thread da UI**: nada de `Command::output()`, `sleep`, chamada de rede ou espera por processo
+  dentro do frame do `egui`. Era exatamente isso que fazia o Windows escrever **"(Não Respondendo)"** no título
+  (`reg` ~200 ms, `powershell` 300 ms–2 s, o teste de túnel com dois `curl -m 20` chegando a ~40 s). Toda ação
+  demorada vai para o executor de segundo plano (`spawn_bg` + `poll_bg`, com o resultado aplicado na thread da UI via
+  `BgOutcome`/`BgEffect`); enquanto houver tarefa em voo, peça `request_repaint` periódico (200 ms) para a UI
+  continuar viva.
+- **LAN pelo relay interno, não por `netsh portproxy`**: o caminho padrão de publicação na rede local é o **relay TCP
+  dentro do processo da GUI** — escuta em `0.0.0.0:<porta>` (ou no IP escolhido em "Escutar em") e encaminha para
+  `127.0.0.1:<porta do motor>`, copiando bytes nos dois sentidos sem inspecionar HTTP (keep-alive e SSE passam
+  intactos). Ganhos medidos: **não pede UAC**, **não deixa regra no sistema** (a do `netsh` sobrevive a reboot) e
+  **morre com o app**. Não crie regras `portproxy` novas: o suporte a `netsh` fica restrito à **remoção de regra
+  legada**, que só aparece na UI quando existe alguma.
 - **Nomenclatura dos Binários Compilados:** cópias locais para teste/distribuição manual devem incluir a versão no
   nome (ex.: `fzcomputerai-v2.0.0.exe`), mantendo a fonte de verdade em `Cargo.toml`. **EXCEÇÃO NORMATIVA — o
   instalador do release NÃO leva versão no nome:** o asset publicado é sempre `fzcomputerai-setup-windows-x64.exe`,
@@ -37,17 +62,19 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
   versões já instaladas. Quem quiser versão no nome do instalador precisa mudar os três lados juntos.
 
 ### 2. Comunicação MCP & Ferramentas de Visão
-- As ferramentas de visão computacional expostas via MCP são:
-  - `get_desktop_state`: Captura do desktop e lista de janelas.
-  - `get_window_state`: Captura focada da janela e tokens de acessibilidade.
-  - `take_screenshot`: Imagem base64 para modelos de visão multimodal.
-  - `mouse_click`, `mouse_move`, `mouse_drag`, `keyboard_type`, `keyboard_press`, `shortcut`.
-  - `start_recording`, `stop_recording`.
+- As ferramentas de visão computacional expostas via MCP são (nomes REAIS do motor — não invente variantes tipo `take_screenshot`/`mouse_click`, que não existem):
+  - `get_desktop_state`: Captura do desktop, lista de janelas e cursor (screenshot embutido).
+  - `get_window_state`: Captura focada da janela + tokens de acessibilidade (UIA) clicáveis.
+  - `zoom`, `get_accessibility_tree`: inspeção fina e árvore semântica.
+  - `click`, `double_click`, `right_click`, `move_cursor`, `drag`, `scroll`.
+  - `type_text`, `press_key`, `hotkey`, `set_value`.
+  - `launch_app`, `kill_app`, `list_apps`, `list_windows`, `bring_to_front`, `set_window_frame`.
+  - `start_recording`, `stop_recording`, `get_recording_state`, `replay_trajectory`, `verify_state`.
 
 ### 3. Preservação de Direitos & Atribuição
-- O motor `cua-driver` é derivado do projeto open-source `trycua/cua` sob licença MIT.
-- **Sempre preservar** a declaração de Copyright original e os créditos no `README.md` e `LICENSE.md`.
-- As contribuições deste repositório e a GUI `fzcomputerai` estão sob licença **CC BY 4.0** (Roger Luft / Webstorage Tecnologia).
+- O motor `cua-driver` é parte do projeto open-source `trycua/cua`, de **Cua AI, Inc.**, sob licença **MIT** (`Copyright (c) 2025 Cua AI, Inc.`).
+- **Sempre preservar** a declaração de Copyright original, o texto integral da MIT do Cua, a citação formal (`@software{cua2025...}`) e o agradecimento no `README.md`, `README_EN.md`, `LICENSE.md` e `installer/LICENSE.txt`. A MIT **exige** que o aviso de copyright e a licença acompanhem cópias ou porções substanciais — nunca remova essas seções.
+- As contribuições deste repositório e a GUI `fzcomputerai` estão sob licença **MIT** (`Copyright (c) 2026 Roger Luft (VeilWalker) — Webstorage Tecnologia`). A licença foi alterada de CC BY 4.0 para MIT na v2.1.0, para casar com a do projeto Cua e remover fricção de adoção (a própria Creative Commons não recomenda CC-BY para software). Fonte da verdade: `LICENSE.md`; os campos `license` de `fzcomputerai/Cargo.toml` e `package.json` devem acompanhar.
 
 ### 4. Assinatura de Código, SmartScreen e Segurança do Usuário Final (NORMATIVO)
 
@@ -105,6 +132,63 @@ não em workflow de CI, não "temporariamente para testar"**:
   elegibilidade do Azure Trusted Signing) vivem no `SIGNING.md`. Se precisar citá-los, **cite-os de lá**; se
   precisar atualizá-los, atualize `SIGNING.md` primeiro e cite a fonte. **Não afirme número, preço ou lista de
   países sem fonte verificável.**
+
+---
+
+### 5. 🗄️ REGRA DE OURO — `archived/` antes de qualquer alteração destrutiva (NORMATIVO)
+
+**Neste projeto nada é apagado.** Antes de **modificar de forma destrutiva, sobrescrever, mover ou remover**
+qualquer arquivo, faça **backup do arquivo em questão** (ou mova o próprio arquivo) para a pasta `archived/` na
+raiz do repositório.
+
+- A pasta `archived/` **está no `.gitignore`** e portanto **nunca entra no branch** — ela é histórico/lixo local,
+  não artefato do repositório. Se ela não existir, **crie-a antes** de começar (`mkdir -p archived/`).
+- Use um subdiretório com data e motivo, para o histórico ser legível:
+  `archived/AAAA-MM-DD-<motivo>/` (ex.: `archived/2026-08-02-limpeza-repo/`).
+- Ao **desrastrear** algo do git, o par correto é: copiar para `archived/`, depois
+  `git rm --cached <arquivo>`, depois mover o arquivo para `archived/`. Nunca `git rm` direto (perde o conteúdo).
+- Isso vale também para documentação: ao reescrever um `.md` por inteiro, arquive a versão anterior primeiro.
+- **Exceção:** artefatos de build reproduzíveis (`target/`, `dist/`) não precisam de arquivamento — são gerados.
+
+### 5.1. ⛔ NUNCA leia nem varra os exports de conversa (ARMADILHA REAL)
+
+**Não faça `grep`/`Read`/busca recursiva em `.claude/`, `.claude-code-history/` ou
+`archived/`.** São **exports de conversa de centenas de KB por arquivo**. Uma busca
+recursiva na raiz cai dentro deles, devolve blocos enormes de JSON/markdown e
+**estoura o contexto do agente** — na prática isso já custou **horas** para o Roger
+tirar um agente de loop infinito. O histórico foi movido para
+`archived/2026-08-02-limpeza-repo/claude-history/` justamente para sair do caminho.
+
+Ao buscar no repositório, **sempre exclua esses diretórios** e prefira alvo explícito:
+
+```bash
+# BOM: lista de arquivos explícita
+grep -rn "<termo>" README.md AGENTS.md CHANGELOG.md docs/ fzcomputerai/src/
+
+# BOM: com exclusões
+grep -rn "<termo>" . --exclude-dir=.claude --exclude-dir=.claude-code-history \
+  --exclude-dir=archived --exclude-dir=cua --exclude-dir=target --exclude-dir=node_modules
+```
+
+O diretório `cua/` (submódulo do motor, repo inteiro de terceiro) e `target/`
+também devem ser excluídos por volume — leia dentro deles apenas por caminho
+direto, quando souber exatamente o arquivo.
+
+### 6. 📚 Documentação e prints (NORMATIVO)
+
+- **Toda alteração funcional obriga varredura de documentação.** Ao mudar comportamento, criar aba/recurso ou
+  mexer em licença/instalação, revise e atualize **todos** os documentos relacionados: `README.md`,
+  `README_EN.md`, `CHANGELOG.md`, `AGENTS.md`, `INSTALL.md`/`INSTALL_EN.md`, `SKILL.md`, `SIGNING.md`,
+  `LICENSE.md` e a documentação em **`./docs/`**. Se a documentação necessária não existir, **crie-a**.
+- **`./docs/` é o lugar da documentação técnica e de uso detalhada.** A raiz guarda o essencial (visão geral,
+  instalação, licença, changelog); o aprofundamento (arquitetura, cada aba, túnel, atualização, solução de
+  problemas) vive em `./docs/`.
+- **A home (`README.md`) precisa vender a ferramenta**: descrição, lista de **features** e **prints reais** da
+  interface. Ao alterar a UI, **capture prints novos** e atualize as imagens — print desatualizado é documentação
+  errada. Os prints ficam em `assets/img/` (ex.: `assets/img/screenshot-<aba>.png`) e devem ser referenciados nos
+  dois READMEs.
+- **Print tem de ser real**, capturado do app compilado (o `cua-driver` pode capturar a janela). Nunca use mockup
+  ou imagem de outra versão.
 
 ---
 

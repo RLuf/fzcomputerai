@@ -1,10 +1,10 @@
 [package]
 name = "fzcomputerai"
-version = "2.0.0"
+version = "2.4.2"
 edition = "2021"
-authors = ["Roger Luft <roger@webstorage.com.br>"]
+authors = ["Roger Luft (VeilWalker) <roger@webstorage.com.br>"]
 description = "Interface Gráfica Nativa em Rust para FzComputerAI & CUA Driver MCP"
-license = "CC-BY-4.0"
+license = "MIT"
 # build.rs embute o recurso VERSIONINFO do Windows no .exe (ver o cabecalho
 # do proprio build.rs). Sem isso as Propriedades do arquivo saem em branco.
 build = "build.rs"

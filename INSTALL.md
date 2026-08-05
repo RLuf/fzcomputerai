@@ -91,11 +91,13 @@ Para permitir que agentes rodando em servidores remotos (como o **FazAI-NG**) en
 ```powershell
 # Configura a variável no ambiente de usuário
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
-
-# Reinicia o serviço de inicialização do cua-driver
-cua-driver stop
-cua-driver autostart kick
 ```
+
+> **Não é preciso tarefa agendada.** Ao abrir, o `fzcomputerai.exe` sobe o motor sozinho, como **processo filho**
+> (apenas quando nada está respondendo na porta), e o motor cai junto com o app — inclusive quando a GUI é fechada
+> no X, pela bandeja ou por `taskkill /F`. Se já houver um motor de **outro** cliente MCP respondendo na porta, o app
+> o detecta, **não** o duplica e **não** o encerra ao fechar (a UI avisa). O antigo `cua-driver autostart kick` foi
+> removido do fluxo do aplicativo.
 
 ### Testando a porta HTTP:
 ```powershell
@@ -104,9 +106,27 @@ netstat -an | findstr 8000
 ```
 
 ### No Cliente Remoto (FazAI-NG / Orquestrador):
+
+> O motor escuta **somente em `127.0.0.1`** (é o que o `netstat` acima mostra). Para o endereço
+> `http://<IP_DO_WINDOWS>:8000/mcp` funcionar de outra máquina, clique em **Publicar na rede** na aba *MCP & Rede*
+> da GUI — ou use a aba **Túnel** para acesso pela internet.
+>
+> Desde a v2.3.0 a publicação na LAN é feita por um **relay TCP dentro do processo da GUI**: ele escuta em
+> `0.0.0.0:<porta>` (ou no IP escolhido no campo *Escutar em*) e encaminha para `127.0.0.1:<porta>` do motor,
+> copiando os bytes nos dois sentidos sem inspecionar o HTTP (keep-alive e SSE passam intactos). Diferenças
+> medidas em relação à antiga regra `netsh portproxy`: **não pede UAC**, **não deixa regra no sistema** (a do
+> `netsh` sobrevive a reboot) e **cai quando o app fecha**. A remoção de regra `portproxy` **legada** continua
+> disponível na mesma aba e só aparece quando existe alguma.
+
 Envie chamadas POST JSON-RPC para:
 - **URL**: `http://<IP_DO_WINDOWS>:8000/mcp`
 - **Body**: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+
+> **Motores `cua-driver` 0.16+**: o endpoint HTTP exige o token `CUA_DRIVER_RS_MCP_HTTP_TOKEN` (32–4096 caracteres) e responde **401** a qualquer chamada sem o header `Authorization: Bearer <token>` — inclusive quando nenhum token foi configurado (fail-closed: 401 para tudo). Gere e ative o token pela aba **Túnel** da GUI (botão **Gerar e ativar token do motor**) e inclua o header nas chamadas. Versões antigas (<= 0.8.x) não têm autenticação.
+>
+> Esses motores também **recusam requisição com header `Origin` de navegador (HTTP 403)** — verificado. Chame do servidor/CLI, não da aba de um browser.
+>
+> Para clientes que aceitam **apenas uma URL** e não têm onde colar header (é o caso do Claude Desktop), use o túnel com **senha no caminho** (`/s/<senha>/mcp`, aba **Túnel**): quem provou a senha já está autenticado perante o app, e o porteiro **acrescenta o `Authorization` ao falar com o motor**. Se o cliente enviar o próprio `Authorization`, o dele prevalece. O segredo do motor não trafega pela internet; a credencial pública passa a ser a senha da URL.
 
 ---
 
@@ -185,6 +205,24 @@ Para iniciar o servidor MCP manualmente via linha de comando em modo interativo 
 ```bash
 cua-driver mcp
 ```
+
+> `cua-driver mcp` é **stdio** e encerra quando o `stdin` fecha (medido no 0.17) — por isso não serve para manter o
+> endpoint HTTP de pé. O modo usado pela GUI é `cua-driver serve`, que também abre o pipe `\\.\pipe\cua-driver`
+> (o canal que o próprio CLI usa em `call`/`status`/`stop`). O HTTP só liga com `CUA_DRIVER_RS_MCP_HTTP_PORT` no
+> ambiente.
+
+### Teste de fora da rede (`scripts/teste_remoto_mcp.py`)
+
+Script de verificação ponta a ponta, escrito **só com a biblioteca padrão do Python 3** (nada para instalar). Ele
+faz `initialize`, `tools/list`, abre uma **janela nova** de navegador na máquina remota (nunca sequestra uma janela
+já aberta), navega até `search.yahoo.com`, digita o termo, localiza e clica no botão de pesquisa
+(Search/Pesquisar/Buscar) ou envia Enter, e confere o resultado lendo a tela de volta.
+
+```bash
+python scripts/teste_remoto_mcp.py <URL> [--token TOKEN] [--termo TEXTO]
+```
+
+Se a URL já tiver a senha no caminho (`/s/<senha>/mcp`), o `--token` não é necessário.
 
 ### Verificação de Saúde (`doctor`)
 ```bash

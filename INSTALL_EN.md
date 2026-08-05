@@ -91,11 +91,13 @@ To allow agents running on remote servers (such as **FazAI-NG**) to send JSON-RP
 ```powershell
 # Set environment variable in User environment
 [Environment]::SetEnvironmentVariable('CUA_DRIVER_RS_MCP_HTTP_PORT', '8000', 'User')
-
-# Restart cua-driver daemon
-cua-driver stop
-cua-driver autostart kick
 ```
+
+> **No scheduled task needed.** On startup, `fzcomputerai.exe` starts the engine itself, as a **child process**
+> (only when nothing is already answering on the port), and the engine goes down with the app — including when the
+> GUI is closed via the X button, the tray menu, or `taskkill /F`. If an engine from **another** MCP client is
+> already answering on the port, the app detects it, does **not** duplicate it and does **not** stop it on exit
+> (the UI says so). The old `cua-driver autostart kick` was removed from the application flow.
 
 ### Testing the HTTP TCP port:
 ```powershell
@@ -104,9 +106,27 @@ netstat -an | findstr 8000
 ```
 
 ### On the Remote Client (FazAI-NG / Orchestrator):
+
+> The engine listens **only on `127.0.0.1`** (that's what the `netstat` above shows). For
+> `http://<WINDOWS_IP>:8000/mcp` to work from another machine, click **Publish on the network** on the GUI's
+> *MCP & Network* tab — or use the **Tunnel** tab for internet access.
+>
+> Since v2.3.0, LAN publishing is done by a **TCP relay running inside the GUI process**: it listens on
+> `0.0.0.0:<port>` (or on the IP chosen in the *Listen on* field) and forwards to the engine's `127.0.0.1:<port>`,
+> copying bytes both ways without inspecting HTTP (keep-alive and SSE pass through intact). Measured differences
+> against the old `netsh portproxy` rule: it **does not prompt for UAC**, **leaves no rule behind on the system**
+> (the `netsh` one survives a reboot) and **goes down when the app closes**. Removing a **legacy** `portproxy` rule
+> is still available on the same tab, and only shows up when one exists.
+
 Send POST JSON-RPC requests to:
 - **URL**: `http://<WINDOWS_IP>:8000/mcp`
 - **Body**: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+
+> **`cua-driver` engines 0.16+**: the HTTP endpoint requires the `CUA_DRIVER_RS_MCP_HTTP_TOKEN` token (32–4096 characters) and responds **401** to any call without the `Authorization: Bearer <token>` header — including when no token is configured at all (fail-closed: 401 for everything). Generate and activate the token from the GUI's **Tunnel** tab (**Generate and activate engine token** button) and include the header in your calls. Older releases (<= 0.8.x) have no authentication.
+>
+> These engines also **reject requests carrying a browser `Origin` header (HTTP 403)** — verified. Call them from a server/CLI, not from a browser tab.
+>
+> For clients that accept **a URL only**, with nowhere to paste a header (Claude Desktop is one), use the tunnel with the **password in the path** (`/s/<password>/mcp`, **Tunnel** tab): whoever proved the password is already authenticated as far as the app is concerned, so the gate **adds the `Authorization` header when talking to the engine**. If the client sends its own `Authorization`, the client's wins. The engine secret never travels over the internet; the public credential becomes the URL password.
 
 ---
 
@@ -183,6 +203,24 @@ In your IDE's `mcp.json` file, add:
 ```bash
 cua-driver mcp
 ```
+
+> `cua-driver mcp` is **stdio** and exits when `stdin` closes (measured on 0.17) — so it cannot keep the HTTP
+> endpoint up. The mode used by the GUI is `cua-driver serve`, which also opens the `\\.\pipe\cua-driver` pipe
+> (the channel the CLI itself uses for `call`/`status`/`stop`). HTTP only comes up with
+> `CUA_DRIVER_RS_MCP_HTTP_PORT` set in the environment.
+
+### Testing from outside the network (`scripts/teste_remoto_mcp.py`)
+
+End-to-end check written with the **Python 3 standard library only** (nothing to install). It runs `initialize`,
+`tools/list`, opens a **new** browser window on the remote machine (it never hijacks an already open window),
+navigates to `search.yahoo.com`, types the term, finds and clicks the search button (Search/Pesquisar/Buscar) or
+sends Enter, and confirms the result by reading the screen back.
+
+```bash
+python scripts/teste_remoto_mcp.py <URL> [--token TOKEN] [--termo TEXT]
+```
+
+If the URL already carries the password in its path (`/s/<password>/mcp`), `--token` is not needed.
 
 ### Health Diagnostics (`doctor`)
 ```bash
