@@ -50,6 +50,7 @@ npm install -g fzcomputerai
 1. Download **`fzcomputerai-setup-windows-x64.exe`** from [https://github.com/RLuf/fzcomputerai/releases/latest](https://github.com/RLuf/fzcomputerai/releases/latest).
 2. Run the file. Since the binaries are not code-signed yet, SmartScreen will show *"Windows protected your PC"* — click **More info → Run anyway**.
 3. During installation, check the **"Install the `cua-driver` engine"** task (required for the MCP server; needs internet) — it runs the official cua project installer.
+4. At the end, setup generates the **self-signed certificate for the HTTPS endpoint** (`fzcomputerai --tls-init`, into `%APPDATA%\FzComputerAI\tls\`) — if it does not, the GUI generates it on first run. Nothing is installed into a trust store. The HTTPS listener is enabled later in the *MCP & Network* tab → **HTTPS** (see [docs/https.md](docs/https.md)).
 
 ### C. Remote Installation via Bash (Linux & macOS One-liner)
 ```bash
@@ -107,6 +108,7 @@ netstat -an | findstr 8000
 Send POST JSON-RPC requests to:
 - **URL**: `http://<WINDOWS_IP>:8000/mcp`
 - **Body**: `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+- **HTTPS** (v2.2.0, optional): enable it in *MCP & Network* → HTTPS and use `https://<WINDOWS_IP>:8443/mcp`; with the self-signed cert, hand the `.crt` to the client (`curl --cacert`); with Let's Encrypt use the domain. Guide: [docs/https.md](docs/https.md).
 
 ---
 

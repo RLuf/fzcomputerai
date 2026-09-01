@@ -25,8 +25,11 @@ fzcomcontrol/
 │  ├─ build.rs                VERSIONINFO do Windows (no-op fora do Windows)
 │  ├─ assets/icon64.rgba      ícone da JANELA, RGBA cru 64x64 (include_bytes!)
 │  └─ src/
-│     ├─ main.rs              NativeOptions, ícone da janela, run_native
+│     ├─ main.rs              NativeOptions, ícone da janela, run_native, flag --tls-init
 │     ├─ app.rs               AppState + toda a lógica + o shell da UI e o tema
+│     ├─ tls.rs               HTTPS do endpoint: proxy TLS (rustls), auto-assinado (rcgen),
+│     │                       Let's Encrypt (instant-acme), inspeção x509, sonda; teste em cargo test tls::
+│     ├─ tray.rs              ícone na bandeja (Windows)
 │     └─ tabs/
 │        ├─ mod.rs
 │        ├─ network.rs        aba MCP & Rede

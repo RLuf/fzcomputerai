@@ -127,6 +127,14 @@ netstat -ano -p tcp | Select-String ":8000"
 4. Confirme que o IP no campo é o IP **atual** da interface ativa. Regra criada para um IP que a máquina não tem mais fica na config e nunca sobe listener.
 5. Se o listener sobe mas outra máquina não conecta, o problema saiu do encaminhamento e virou **firewall** — vale para os dois caminhos, o do app e o de fallback. A GUI avisa isso no console ("netstat mostra listener na LAN mas o teste TCP falhou (firewall?)"). É preciso liberar a porta de entrada no Windows Defender Firewall — a GUI **não** cria regra de firewall.
 
+## 3.5. HTTPS do endpoint (v2.2.0)
+
+Painel na área rolável, acima do diagnóstico. Liga um listener TLS **dentro do app** em `<bind>:8443` que
+encaminha para o motor em `127.0.0.1:<porta>` — mesma mecânica do Encaminhamento LAN (thread do processo,
+sem admin, cai ao fechar). Certificado auto-assinado gerado no setup/primeiro run, Let's Encrypt ou próprio.
+O badge só fica verde após handshake TLS + `POST initialize` reais; **Testar Endpoint** inclui o HTTPS. O
+bearer token continua obrigatório. Guia completo: [https.md](https.md).
+
 ## 4. Lendo o diagnóstico
 
 A área rolável mostra apenas fatos verificados.
@@ -134,6 +142,8 @@ A área rolável mostra apenas fatos verificados.
 **Endpoint MCP HTTP (JSON-RPC) — estado real.** Tabela com porta, host, transporte e status. O host é o **real**: em "LOCAL APENAS" ele mostra `127.0.0.1 (loopback)`, não o IP que você gostaria de usar. O transporte é `HTTP / JSON-RPC` — não há WebSocket aqui, e a tela não anuncia o que não existe.
 
 **URL de Conexão MCP (estado real).** Só mostra o IP da LAN quando `netstat` + POST confirmaram o listener na LAN; nos outros casos mostra a URL de loopback. Tem botão **Copiar**.
+
+**Linha `HTTPS / TLS -> HTTP`** (v2.2.0). Porta, host e status do listener HTTPS, com o mesmo critério: `LISTENING (TLS + JSON-RPC)` só depois da sonda TLS passar. O host mostrado é o que a sonda alcançou de fato.
 
 **Conexões reais na porta (`netstat -ano`).** As linhas cruas, com as mesmas colunas do terminal (`PROT / LOCAL / REMOTO / ESTADO / PID`). Inclui:
 

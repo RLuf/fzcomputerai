@@ -1,6 +1,6 @@
 [package]
 name = "fzcomputerai"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 authors = ["Roger Luft (VeilWalker) <roger@webstorage.com.br>"]
 description = "Interface Gráfica Nativa em Rust para FzComputerAI & CUA Driver MCP"
@@ -45,3 +45,19 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
 open = "5.3"
+
+# ---------------------------------------------------------------------------
+# HTTPS do endpoint MCP (fzcomputerai/src/tls.rs) — v2.2.0.
+# Terminacao TLS DENTRO do app (mesmo desenho do LAN forward) com rustls;
+# certificado auto-assinado gerado por rcgen; Let's Encrypt via instant-acme
+# (ACME RFC 8555, desafio HTTP-01); inspecao do certificado real na tela com
+# x509-parser. Backend criptografico: ring em TODAS as crates (aws-lc-rs
+# exigiria cmake+nasm no runner Windows do release). tokio ja era dependencia.
+# ---------------------------------------------------------------------------
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = { version = "1.12", features = ["std"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
+instant-acme = { version = "0.8", default-features = false, features = ["ring", "hyper-rustls"] }
+x509-parser = "0.18"
+ring = "0.17"
+time = "0.3"

@@ -7,6 +7,32 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [2.2.0] - 2026-09-01
+
+### Adicionado — HTTPS no endpoint MCP (terminação TLS dentro do app)
+- **Listener HTTPS próprio** (`fzcomputerai/src/tls.rs`): uma thread do processo escuta em `<bind>:8443` (porta e endereço configuráveis: 127.0.0.1, IP da LAN ou 0.0.0.0), termina o TLS com `rustls` e copia bytes para `http://127.0.0.1:<porta>` — o **mesmo desenho do Encaminhamento LAN da v2.1.1**: sem admin, sem regra no sistema, cai junto com o app. O motor oficial continua HTTP-only em loopback (endereço e transporte fixos no código do Cua); nada nele foi tocado. O **bearer token continua obrigatório** — o HTTPS protege o transporte, não substitui a autenticação.
+- **Certificado auto-assinado gerado automaticamente** (`rcgen`, ECDSA P-256, 825 dias, SANs: `localhost`, `127.0.0.1`, IP da LAN, nome da máquina e o domínio configurado). Gerado **na instalação** (o setup roda `fzcomputerai --tls-init`, inclusive no upgrade silencioso) **ou no primeiro run, o que vier primeiro** — idempotente: um cert válido que já cobre os SANs é mantido, para o fingerprint não mudar à toa. Renovação automática com menos de 30 dias. Arquivos em `%APPDATA%\FzComputerAI\tls\` (portátil: `tls\` ao lado do exe).
+- **Let's Encrypt** (ACME RFC 8555 via `instant-acme`, desafio **HTTP-01**): informe domínio público e e-mail, clique **Emitir**. O app abre um respondedor temporário em `0.0.0.0:80` só durante a emissão; conta ACME persistida; **renovação automática** com menos de 30 dias; opção *staging* para testar sem gastar limite de rate. Pré-requisitos reais e documentados: DNS do domínio -> IP público desta máquina e porta 80 alcançável (roteador + firewall). Let's Encrypt não emite para IP.
+- **Certificado próprio**: caminhos `.crt`/`.key` PEM informados pelo usuário.
+- **Verificação honesta na tela inicial**: o badge de HTTPS só fica verde após **handshake TLS real + `POST initialize` com resposta JSON-RPC** atrás do listener (sonda em 127.0.0.1 e, quando o bind cobre a LAN, também no IP da LAN). O painel mostra o certificado **realmente servido** (emissor, SANs, validade em dias, **fingerprint SHA-256** copiável), a URL `https://` que funciona agora, protocolo negociado e conexões aceitas. O botão **Testar Endpoint** e a verificação de startup passaram a incluir o HTTPS; a grade de diagnóstico ganhou a linha `HTTPS / TLS -> HTTP`. Erros (porta ocupada, cert ausente, motor mudo atrás do TLS) aparecem no console com causa.
+- **`fzcomputerai --tls-init [--portable]`**: modo de linha de comando sem janela que gera o auto-assinado e grava `tls-init.log` na pasta dos certificados (exit 0/1). É o que o instalador chama; serve para scripts.
+- **`verify-install.ps1`** ganhou o passo 8: presença, validade e SHA-256 do certificado gerado no setup.
+- Documentação nova: [`docs/https.md`](docs/https.md) (como ligar, como o cliente confia — `--cacert`/pin do SHA-256 —, Let's Encrypt passo a passo, limites e solução de problemas).
+
+### Alterado
+- Aba **MCP & Rede**: novo painel **HTTPS do endpoint MCP** na área rolável, acima do diagnóstico — os controles fixos que já funcionavam (motor, porta, encaminhamento LAN) não mudaram de lugar nem de comportamento.
+- Dependências novas no `Cargo.toml` (todas com backend **ring**, para o runner Windows do release não precisar de cmake/nasm): `rustls`, `rustls-pki-types`, `rcgen`, `instant-acme`, `x509-parser`, `ring`, `time`. `tokio` já existia.
+
+### Segurança (o que este recurso NÃO faz — AGENTS.md §4.1 continua valendo)
+- O auto-assinado é um certificado de **servidor TLS** deste endpoint. Ele **não é instalado** em nenhuma store de confiança (`Cert:\CurrentUser\Root` etc.), **não** assina binário e **não** mexe em SmartScreen/Defender. Quem confia nele é o **cliente**, do lado dele: `curl --cacert selfsigned.crt` ou pin do SHA-256 exibido na tela. Isso é a diferença entre "servir TLS" (permitido) e "alterar a postura de segurança da máquina" (proibido).
+- A chave privada fica só no disco do usuário, nunca no registro, log ou console. A sonda interna que aceita qualquer certificado (`CaptureVerifier`) existe **apenas** para o app conferir a si mesmo em loopback/LAN.
+
+### Testado
+- `cargo test --bin fzcomputerai tls::` — ponta a ponta com motor falso: geração do auto-assinado (SANs conferidos, 825 dias), idempotência, regeneração ao mudar SAN, listener TLS respondendo `initialize` com **HTTP 200 + JSON-RPC** com o token certo e **401** com token errado (encaminhamento transparente), contagem de conexões, encerramento do listener.
+- Harness externo contra o mesmo `tls.rs` com `python3 -m http.server` como upstream: `curl -k` e `curl --cacert selfsigned.crt` (verificação OK, `ssl_verify_result=0`), download de 3 MB com SHA-256 idêntico, **20 downloads de 3 MB em paralelo** e **200 requisições sequenciais** todos HTTP 200, POST encaminhado transparente, `openssl s_client` negociando TLS 1.3 (`TLS_AES_256_GCM_SHA384`). Esse teste **achou e corrigiu dois bugs antes do release**: (1) `read_tls` chamado várias vezes sem `process_new_packets` enchia o buffer do rustls e produzia EOF falso em corpos grandes; (2) em TLS 1.3 a requisição que chega no mesmo segmento do `Finished` já estava decifrada após o handshake e não era drenada — sob carga, 14 de 20 conexões morriam com *unexpected eof*.
+- `fzcomputerai --tls-init` executado duas vezes: primeira `GERADO`, segunda `JA EXISTIA (valido, mantido)`, exit 0, chave com permissão 0600, `tls-init.log` com SANs/validade/SHA-256.
+- `cargo check`/`cargo build`/`cargo test` no Linux (o CI de `.deb`/`.rpm`/AppImage compila as mesmas crates).
+
 ## [2.1.1] - 2026-08-03
 
 > Versão que nasceu de um dia inteiro de teste na máquina real. Tudo abaixo foi

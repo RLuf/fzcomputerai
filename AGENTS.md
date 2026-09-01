@@ -11,6 +11,7 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - **Motor Principal:** `cua-driver` (escrito em Rust, localizado em `cua/libs/cua-driver/rust`).
 - **Interface Gráfica:** `fzcomputerai` (escrito em Rust com `egui 0.29.1` / `eframe 0.29.1`).
 - **Protocolo de Comunicação:** MCP via Stdio local e HTTP TCP/IP (`CUA_DRIVER_RS_MCP_HTTP_PORT=8000`), com *bearer token* obrigatório em `CUA_DRIVER_RS_MCP_HTTP_TOKEN` — gerado e persistido pela própria GUI (ver 1.1).
+- **HTTPS (v2.2.0):** terminação TLS **dentro da GUI** (`fzcomputerai/src/tls.rs`), listener em `<bind>:8443` encaminhando para `127.0.0.1:8000`. Certificado auto-assinado gerado no setup (`--tls-init`) ou no primeiro run; Let's Encrypt (HTTP-01) opcional; cert próprio opcional. Ver 1.2.
 - **Patrocinadores Oficiais:** Webstorage Tecnologia (`www.webstorage.com.br`) e Imóvel Site (`www.imovelsite.com.br`).
 
 ---
@@ -34,6 +35,16 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - **Encaminhamento LAN é feito PELO PRÓPRIO APP, não por `netsh portproxy`**: uma thread do processo escuta em `<ip_lan>:porta` e copia bytes contra `127.0.0.1:porta` (`std::net::TcpListener` + `std::io::copy`, **sem dependência nova**); é TCP puro, então `curl`, `telnet` e `nc` atravessam igual. O `portproxy` é regra **estática** do serviço IP Helper: exigia admin/UAC para criar e remover, continuava aparecendo como `LISTENING` na LAN **mesmo com o motor morto** (aceitando conexões que morriam no destino — falso positivo de serviço no ar) e sobrevivia ao fechamento do app e ao reboot, obrigando rotina de limpeza. O `netsh` permanece **apenas como fallback**, quando o bind no IP da LAN falha. Não volte a tratá-lo como o caminho normal da LAN.
 - **Limpeza ao fechar é Rust nativo, sem PowerShell e sem elevação**: a versão anterior disparava um `powershell -WindowStyle Hidden` de ~2 KB que esperava o processo morrer, matava processos, escrevia no registro, rodava `netsh` e chamava `-Verb RunAs` — o **Microsoft Defender flagrou essa linha de comando** (detecção 2147941383, 2026-08-03). Use chamadas diretas e curtas. E, pela mesma regra dos túneis, **é PROIBIDO `taskkill /F /IM cua-driver.exe`** (foi removido do app e do instalador): ele matava TODO processo com esse nome, inclusive um motor que o usuário estivesse rodando para outro fim. O caminho é `cua-driver stop` (comando oficial) e, se sobrar processo, kill **por PID** com o caminho do executável conferido.
 - **Pacote de skills é instalado PELO SETUP**: `cua-driver skills install` roda no fim da instalação. Sem os symlinks, o agente conecta no MCP e **não enxerga ferramenta nenhuma**, e quem acabou de instalar não tem como saber que precisa clicar num botão da aba Doctor & Skills. O comando é idempotente e, pelo help oficial do motor, "Never overwrites existing user links" (verificado apagando os links e vendo o setup recriar os quatro: Claude Code, Codex, Antigravity, Hermes). O botão da aba continua existindo para reparo manual.
+### 1.2. HTTPS do endpoint — convenções (NORMATIVO, v2.2.0)
+- **A terminação TLS é do APP, não do motor.** O `cua-driver serve` é HTTP-only em `127.0.0.1` (fixo no código do Cua). Não tente "ligar HTTPS no motor" nem patchear o submódulo: o caminho é o listener de `tls.rs` (thread do processo, `rustls`, cópia de bytes para o loopback) — mesma doutrina do Encaminhamento LAN (sem admin, sem regra no sistema, cai com o app). O bearer token **continua obrigatório** atrás do TLS.
+- **Certificado auto-assinado é cert de SERVIDOR TLS, e só isso.** Gerado por `rcgen` em `tls::ensure_self_signed` (SANs: localhost, 127.0.0.1, IP da LAN, hostname, domínio). É **PROIBIDO** instalá-lo (ou qualquer CA) em store de confiança da máquina, usá-lo para assinar binário, ou afirmar que ele "remove aviso" de navegador — isso é a seção 4.1 e ela continua valendo integralmente. O cliente confia **do lado dele**: `--cacert` com o `.crt` ou pin do SHA-256 mostrado na tela. Se encontrar código que instale o cert em store, remova e registre no CHANGELOG.
+- **"Na instalação ou no primeiro run, o que vier primeiro"**: o instalador chama `fzcomputerai --tls-init` (também no upgrade silencioso) e a GUI repete `ensure_self_signed` no startup. Os dois são **idempotentes**: cert válido (> 30 dias) que já cobre os SANs **não é regenerado** — regenerar troca o fingerprint e quebra o pin de todo cliente. Regeneração explícita só pelo botão (que guarda `selfsigned.prev.*`).
+- **Let's Encrypt = HTTP-01 na porta 80, e ponto.** `instant-acme`, conta persistida em `letsencrypt-account.json`, respondedor temporário em `0.0.0.0:80` só durante a emissão, renovação automática < 30 dias (checagem a cada 6 h em `poll_tls`). Não prometa emissão sem DNS público + porta 80 alcançável; não implemente DNS-01 "manual" que trave a UI esperando o usuário. Use *staging* nos testes (o limite de rate da produção é real).
+- **Status honesto também aqui**: `TlsStatus::Listening` só após `tls::probe_https` (handshake real + `POST initialize` com JSON-RPC). "Listener de pé" sem JSON-RPC é `ListeningNoMcp` (amarelo) — nunca verde.
+- **Segredos**: chave privada só em arquivo (`%APPDATA%\FzComputerAI\tls\`, 0600 no unix); nunca em registro, log, console ou argv. Preferências `tlscfg:*` guardam apenas caminhos/flags.
+- **Crypto backend = ring** em todas as crates (`rustls`, `rcgen`, `instant-acme`). Não troque para `aws-lc-rs`: exige cmake+nasm no runner Windows do release.
+- **Testes**: `cargo test --bin fzcomputerai tls::` roda o ponta a ponta com motor falso (geração, idempotência, proxy, 200/401 transparentes, stop). Mantenha-o verde ao mexer em `tls.rs`.
+
 - **Nomenclatura dos Binários Compilados:** cópias locais para teste/distribuição manual devem incluir a versão no
   nome (ex.: `fzcomputerai-v2.0.0.exe`), mantendo a fonte de verdade em `Cargo.toml`. **EXCEÇÃO NORMATIVA — o
   instalador do release NÃO leva versão no nome:** o asset publicado é sempre `fzcomputerai-setup-windows-x64.exe`,
@@ -57,6 +68,11 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - As contribuições deste repositório e a GUI `fzcomputerai` estão sob licença **MIT** (`Copyright (c) 2026 Roger Luft (VeilWalker) — Webstorage Tecnologia`). A licença foi alterada de CC BY 4.0 para MIT na v2.1.0, para casar com a do projeto Cua e remover fricção de adoção (a própria Creative Commons não recomenda CC-BY para software). Fonte da verdade: `LICENSE.md`; os campos `license` de `fzcomputerai/Cargo.toml` e `package.json` devem acompanhar.
 
 ### 4. Assinatura de Código, SmartScreen e Segurança do Usuário Final (NORMATIVO)
+
+> **Nota v2.2.0:** o certificado **auto-assinado de servidor TLS** do endpoint HTTPS (seção 1.2) **não** é
+> exceção a nada abaixo: ele serve TLS e nunca é instalado em store de confiança nem usado para assinar
+> artefato. O item 1 de 4.1 proíbe auto-assinado **para assinar artefatos distribuídos**; o item 2 proíbe
+> instalar CA/cert em store. `tls.rs` não faz nenhum dos dois.
 
 > **Fonte da verdade:** [`SIGNING.md`](SIGNING.md). Leia-o **antes** de tocar em qualquer coisa relacionada a
 > assinatura, certificados, instalador ou avisos do Windows. Esta seção é o resumo vinculante; o documento traz o

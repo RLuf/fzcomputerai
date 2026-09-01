@@ -2,6 +2,7 @@
 
 mod app;
 mod tabs;
+mod tls;
 mod tray;
 
 use app::FzComputerApp;
@@ -27,6 +28,30 @@ fn app_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
+    // Backend criptografico do rustls (HTTPS do endpoint): instalado UMA vez,
+    // antes de qualquer thread. Sem isto o primeiro uso do rustls entra em
+    // panic quando mais de um provider esta linkado.
+    tls::install_crypto_provider();
+
+    // `fzcomputerai --tls-init [--portable]`: gera o certificado auto-assinado
+    // do endpoint HTTPS sem abrir a janela. E o que o instalador chama no fim
+    // do setup ("na instalacao ou no primeiro run, o que vier primeiro"); a
+    // GUI repete a mesma chamada no startup, de forma idempotente. Resultado
+    // em <dir-certs>\tls-init.log (binario sem console).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--tls-init") {
+        let portable = args.iter().any(|a| a == "--portable")
+            || std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|d| d.join("fzcomputerai.portable").exists()))
+                .unwrap_or(false);
+        let code = match tls::cli_tls_init(portable, &app::detect_lan_ip()) {
+            Ok(_) => 0,
+            Err(_) => 1,
+        };
+        std::process::exit(code);
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             // Título vindo de UMA fonte só: a thread da bandeja localiza esta
