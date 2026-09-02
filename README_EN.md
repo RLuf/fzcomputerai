@@ -52,6 +52,7 @@
 | **Engine lifecycle** | The GUI **owns** the daemon: it launches `cua-driver serve` as a **child process**, with port and token injected into its environment, and the engine's `stdout`/`stderr` go to `%TEMP%\fzcomputerai-update\cua-driver-serve.log`, which the console follows like `tail -f` (prefix `[motor]`). **Start** never tears down an engine that already answers — use **Restart** to force a process swap. Closing the app shuts the engine down and undoes temporary configuration through short native calls, with no PowerShell and no elevation. |
 | **Honest status** | Nothing is assumed: the check is a real JSON-RPC `POST initialize`, and the LAN green badge only appears with a listener confirmed in `netstat` **and** the endpoint answering. |
 | **LAN access** | Forwarding done **by the app itself**: a thread inside the process listens on `<lan_ip>:port` and copies bytes against `127.0.0.1:port`. It is plain TCP — `curl`, `telnet` and `nc` go through just the same. No admin/UAC prompt and no leftovers: closing the app closes both ports with it. `netsh portproxy` remains **only as a fallback**, for when binding on the LAN IP fails — in that case the **3-state** badge (working / no effect / no rule) and the tracked cleanup apply, removing only the rules the app created itself. |
+| **Endpoint HTTPS** | **[v2.2.0]** TLS listener inside the app (`rustls`), same mechanics as LAN forwarding: `https://<ip>:8443/mcp` forwards to the engine at `http://127.0.0.1:8000/mcp`. **Self-signed certificate generated automatically** (at setup via `--tls-init` or on first run — whichever comes first; renewed before expiry), **Let's Encrypt** in one click (public domain + port 80; auto-renewal) or your own `.crt/.key`. Nothing is installed into a trust store: the client trusts via the `.crt` or the SHA-256 shown on screen. The bearer token is still required. Details in [docs/https.md](docs/https.md). |
 | **Internet access** | **Tunnel** tab: Cloudflare Tunnel (quick or named), ngrok and reverse SSH. **Outbound** tunnel — no router port forwarding required. |
 | **URL password** | Level-1 authentication through a local gate: the URL becomes `https://…/s/<password>/mcp`, and without the password requests get a 404. |
 | **Exposure probe** | The app tests the **public URL** with a credential-less request and reports the verified result — exposed, blocked at the edge, or not verifiable. |
@@ -115,13 +116,13 @@ The server exposes a standardized set of MCP tools (*MCP Tools*) for multimodal 
 
 ---
 
-## 🖥️ Native GUI (Rust `fzcomputerai v2.1.0`)
+## 🖥️ Native GUI (Rust `fzcomputerai v2.2.0`)
 
 Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / English** with real-time language toggle. Organized into **7 tabs**:
 
 | Tab | Purpose |
 | :--- | :--- |
-| **MCP & Network** | MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), LAN forwarding performed by the app itself (`netsh portproxy` only as a fallback), real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check & Update** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
+| **MCP & Network** | **[NEW v2.2.0] Endpoint HTTPS** — TLS terminated inside the app (`https://<ip>:8443/mcp` -> `http://127.0.0.1:8000/mcp`) with a **self-signed certificate generated at install time or on first run**, **Let's Encrypt** (ACME HTTP-01, auto-renewal) or your own certificate; badge turns green only after a real TLS handshake + JSON-RPC, SHA-256 fingerprint on screen. MCP server HTTP port configuration (`CUA_DRIVER_RS_MCP_HTTP_PORT`), LAN forwarding performed by the app itself (`netsh portproxy` only as a fallback), real `/mcp` endpoint test over TCP, network URL with auto-detected LAN IP, **Check & Update** button (GitHub Releases auto-installer), **Start with Windows** (autostart) option, and deduplicated **Debug Console** with auto-scroll. |
 | **MCP Tools** | **[NEW v2.0.0]** Interactive visual catalog to list, filter by category, and run any MCP vision & automation tool directly. |
 | **Tunnel (Internet)** | **[NEW v2.1.0]** Exposes the local MCP HTTP endpoint to the internet (public HTTPS -> local HTTP) via **Cloudflare Tunnel** (quick + named, OAuth login/token), **ngrok**, and **reverse SSH** (own server or localhost.run/serveo). Captures the public URL, builds the `mcpServers` snippet, and truly tests it with a `POST initialize` exposure probe. Level-1 authentication = **URL password** through a local gate (`/s/<password>/mcp`). Clean lifecycle: the tunnel never outlives the app. **The engine does have authentication of its own — measured on 2026-08-03 against `cua-driver` 0.17.0: every request without `Authorization: Bearer <token>` gets HTTP 401 `{"code":-32001,"message":"Authentication required"}`. The URL password is an extra layer at the edge, not a replacement for the token.** |
 | **Calibration & Vision** | Screen calibration, DPI scaling, and coordinate click testing. |
@@ -189,7 +190,7 @@ cua-driver serve
 > ```
 
 ### Configuring the HTTP Client / Orchestrator:
-- **Endpoint**: `http://<WINDOWS_IP>:8000/mcp`
+- **Endpoint**: `http://<WINDOWS_IP>:8000/mcp` — or, with HTTPS enabled in the *MCP & Network* tab, `https://<WINDOWS_IP>:8443/mcp` (self-signed: the client must trust the `.crt`/fingerprint; Let's Encrypt: `https://<your-domain>:8443/mcp`, trusted by any client). See [docs/https.md](docs/https.md).
 - **Method**: `POST`
 - **Header**: `Content-Type: application/json`
 - **Header**: `Authorization: Bearer <your-token>` — **mandatory**. Measured on 2026-08-03: without it, `POST /mcp`, `GET /mcp` and `GET /` all three return the same HTTP 401 with `{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required"}}` (and **no** `WWW-Authenticate` header). The TCP connection itself is accepted normally — the refusal happens at the application layer. With the correct header: HTTP 200 carrying the `initialize` `result`.
@@ -320,6 +321,7 @@ Detailed documentation lives in [`docs/`](docs/README.md) (written in Portuguese
 | :--- | :--- |
 | [Architecture](docs/arquitetura.md) | How the GUI and the engine split responsibilities, MCP transport, where state lives, honest-status principle |
 | [MCP & Network tab](docs/uso-mcp-rede.md) | Engine lifecycle, port, LAN forwarding and how to read the diagnostics |
+| [Endpoint HTTPS](docs/https.md) | Enable `https://` on the MCP: automatic self-signed, Let's Encrypt, own certificate, how the client trusts it (pt-BR) |
 | [Tunnel tab](docs/uso-tunel.md) | Cloudflare, ngrok and reverse SSH step by step, URL password and exposure probe |
 | [Remote access](docs/acesso-remoto.md) | LAN vs tunnel vs VPN, and **why there is no `0.0.0.0` bind** |
 | [Updating](docs/atualizacao.md) | Update Center: interface and engine, and what is verified for each |

@@ -12,6 +12,7 @@
 #   5. Qual porta/bind estao configurados (HKCU\Environment)
 #   6. Em QUAIS enderecos a porta esta OUVINDO de fato (netstat)
 #   7. O MCP esta FUNCIONAL?              (conexao TCP real em 127.0.0.1)
+#   8. Certificado auto-assinado do endpoint HTTPS (gerado no setup)
 #
 # Texto em ASCII de proposito: o Windows PowerShell 5.1 le este arquivo com a
 # codepage ANSI local e acentuacao viraria mojibake.
@@ -155,6 +156,29 @@ $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Select-Object -First 1).IPAddress
 if ($lanIp) {
     Test-McpEndpoint $lanIp $port $false
+}
+
+# --- 8. HTTPS do endpoint: certificado auto-assinado gerado na instalacao ---
+# O setup roda "fzcomputerai --tls-init" (ou o primeiro run da GUI gera). O
+# cert e de SERVIDOR TLS e NAO e instalado em nenhuma store de confianca -
+# o cliente confia pelo fingerprint SHA-256 ou pelo arquivo .crt.
+Write-Host ""
+$tlsDir = Join-Path $env:APPDATA 'FzComputerAI\tls'
+$tlsCrt = Join-Path $tlsDir 'selfsigned.crt'
+if (Test-Path $tlsCrt) {
+    try {
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($tlsCrt)
+        $dias = [int]($cert.NotAfter - (Get-Date)).TotalDays
+        Ok "Certificado HTTPS auto-assinado presente: $tlsCrt"
+        Info "   valido ate $($cert.NotAfter.ToString('yyyy-MM-dd')) ($dias dias) - SHA-1 $($cert.Thumbprint)"
+        $sha256 = (Get-FileHash -Algorithm SHA256 -InputStream ([IO.MemoryStream]::new($cert.RawData))).Hash -replace '(..)(?!$)','$1:'
+        Info "   SHA-256: $sha256"
+        Info "   O listener HTTPS (padrao :8443) e ligado na GUI, aba MCP & Rede > HTTPS."
+    } catch {
+        Falha "selfsigned.crt existe mas nao pode ser lido: $($_.Exception.Message)"
+    }
+} else {
+    Info "Certificado HTTPS ainda nao gerado ($tlsCrt) - a GUI gera no primeiro run. Log: $tlsDir\tls-init.log"
 }
 
 Write-Host ""

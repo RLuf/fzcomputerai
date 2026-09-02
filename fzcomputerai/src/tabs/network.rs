@@ -1,6 +1,7 @@
 use crate::app::{
-    status_dot, term_button, term_button_danger, AppState, Language, PortStatus, TERM_BG_PANEL,
-    TERM_GRAY, TERM_GREEN, TERM_GREEN_BRIGHT, TERM_WHITE, ST_ERR, ST_OK, ST_WARN,
+    status_dot, term_button, term_button_danger, AppState, Language, PortStatus, TlsBind,
+    TlsMode, TlsStatus, TERM_BG_PANEL, TERM_GRAY, TERM_GREEN, TERM_GREEN_BRIGHT, TERM_WHITE,
+    ST_ERR, ST_OK, ST_WARN,
 };
 use egui::{Frame, Margin, RichText, Rounding, Ui, Vec2};
 
@@ -28,7 +29,341 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         .max_height(ui.available_height())
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // HTTPS entra na area rolavel: nao encolhe os controles fixos
+            // que ja funcionavam e fica logo acima do diagnostico.
+            render_https(ui, state);
+            ui.add_space(10.0);
             render_diagnostics(ui, state);
+        });
+}
+
+// ─── HTTPS (terminacao TLS no proprio app, ver src/tls.rs) ───
+fn render_https(ui: &mut Ui, state: &mut AppState) {
+    Frame::none()
+        .fill(TERM_BG_PANEL)
+        .rounding(Rounding::same(2.0))
+        .inner_margin(Margin::same(12.0))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(match state.language {
+                        Language::PtBr => "HTTPS do endpoint MCP",
+                        Language::English => "MCP endpoint HTTPS",
+                    })
+                    .size(14.0)
+                    .strong()
+                    .color(TERM_GREEN_BRIGHT),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Badge HONESTO: verde so com handshake TLS + JSON-RPC reais.
+                    let (txt, color) = match state.tls_status {
+                        TlsStatus::Listening => (
+                            format!("HTTPS ATIVO :{}", state.tls_port.trim()),
+                            ST_OK,
+                        ),
+                        TlsStatus::ListeningNoMcp => (
+                            match state.language {
+                                Language::PtBr => format!("TLS OK, MOTOR NAO RESPONDE :{}", state.tls_port.trim()),
+                                Language::English => format!("TLS OK, ENGINE NOT ANSWERING :{}", state.tls_port.trim()),
+                            },
+                            ST_WARN,
+                        ),
+                        TlsStatus::Error => (
+                            match state.language {
+                                Language::PtBr => "ERRO".to_string(),
+                                Language::English => "ERROR".to_string(),
+                            },
+                            ST_ERR,
+                        ),
+                        TlsStatus::Stopped => (
+                            match state.language {
+                                Language::PtBr => "DESLIGADO".to_string(),
+                                Language::English => "OFF".to_string(),
+                            },
+                            ST_WARN,
+                        ),
+                    };
+                    ui.label(RichText::new(txt).color(color).strong().size(12.0));
+                    status_dot(ui, color);
+                });
+            });
+
+            ui.label(
+                RichText::new(match state.language {
+                    Language::PtBr => "O motor so fala HTTP em 127.0.0.1. Este listener termina o TLS dentro do app e encaminha para ele — mesmo desenho do Encaminhamento LAN (sem admin, some ao fechar). O bearer token continua obrigatorio.",
+                    Language::English => "The engine only speaks HTTP on 127.0.0.1. This listener terminates TLS inside the app and forwards to it — same design as LAN Forwarding (no admin, gone on close). The bearer token is still required.",
+                })
+                .size(11.0)
+                .color(TERM_GRAY),
+            );
+            ui.add_space(6.0);
+
+            // Linha 1: ligar, porta, bind
+            ui.horizontal_wrapped(|ui| {
+                let mut on = state.tls_enabled;
+                if ui
+                    .checkbox(
+                        &mut on,
+                        match state.language {
+                            Language::PtBr => "Ligar HTTPS (persistido; sobe com o app)",
+                            Language::English => "Enable HTTPS (persisted; starts with the app)",
+                        },
+                    )
+                    .changed()
+                {
+                    state.set_tls_enabled(on);
+                }
+                ui.add_space(12.0);
+                ui.label(match state.language {
+                    Language::PtBr => "Porta HTTPS:",
+                    Language::English => "HTTPS port:",
+                });
+                ui.add(egui::TextEdit::singleline(&mut state.tls_port).desired_width(60.0));
+                ui.add_space(12.0);
+                ui.label(match state.language {
+                    Language::PtBr => "Escutar em:",
+                    Language::English => "Listen on:",
+                });
+                let lan = state.lan_ip.trim().to_string();
+                egui::ComboBox::from_id_salt("tls_bind")
+                    .selected_text(match state.tls_bind {
+                        TlsBind::Loopback => "127.0.0.1".to_string(),
+                        TlsBind::Lan => format!("{} (LAN)", lan),
+                        TlsBind::All => "0.0.0.0 (todas)".to_string(),
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut state.tls_bind, TlsBind::Loopback, "127.0.0.1");
+                        ui.selectable_value(&mut state.tls_bind, TlsBind::Lan, format!("{} (LAN)", lan));
+                        ui.selectable_value(&mut state.tls_bind, TlsBind::All, "0.0.0.0");
+                    });
+            });
+
+            // Linha 2: origem do certificado
+            ui.horizontal_wrapped(|ui| {
+                ui.label(match state.language {
+                    Language::PtBr => "Certificado:",
+                    Language::English => "Certificate:",
+                });
+                let prev = state.tls_mode;
+                ui.selectable_value(
+                    &mut state.tls_mode,
+                    TlsMode::SelfSigned,
+                    match state.language {
+                        Language::PtBr => "Auto-assinado (gerado pelo app)",
+                        Language::English => "Self-signed (generated by the app)",
+                    },
+                );
+                ui.selectable_value(&mut state.tls_mode, TlsMode::LetsEncrypt, "Let's Encrypt");
+                ui.selectable_value(
+                    &mut state.tls_mode,
+                    TlsMode::Custom,
+                    match state.language {
+                        Language::PtBr => "Proprio (.crt/.key PEM)",
+                        Language::English => "Own (.crt/.key PEM)",
+                    },
+                );
+                if prev != state.tls_mode {
+                    state.tls_refresh_cert_info();
+                }
+            });
+
+            match state.tls_mode {
+                TlsMode::SelfSigned => {
+                    ui.label(
+                        RichText::new(match state.language {
+                            Language::PtBr => "Gerado na instalacao (fzcomputerai --tls-init) ou no primeiro run, o que vier primeiro. SANs: localhost, 127.0.0.1, IP da LAN, nome da maquina. NUNCA e instalado em store de confianca — o cliente confia pelo SHA-256 abaixo ou pelo .crt (curl --cacert).",
+                            Language::English => "Generated at install time (fzcomputerai --tls-init) or on first run, whichever comes first. SANs: localhost, 127.0.0.1, LAN IP, machine name. NEVER installed into a trust store — the client trusts via the SHA-256 below or the .crt file (curl --cacert).",
+                        })
+                        .size(11.0)
+                        .color(TERM_GRAY),
+                    );
+                }
+                TlsMode::LetsEncrypt => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(match state.language {
+                            Language::PtBr => "Dominio publico:",
+                            Language::English => "Public domain:",
+                        });
+                        ui.add(egui::TextEdit::singleline(&mut state.tls_domain).desired_width(200.0));
+                        ui.label("E-mail:");
+                        ui.add(egui::TextEdit::singleline(&mut state.tls_email).desired_width(180.0));
+                        ui.checkbox(
+                            &mut state.tls_staging,
+                            match state.language {
+                                Language::PtBr => "Staging (teste)",
+                                Language::English => "Staging (test)",
+                            },
+                        );
+                    });
+                    ui.label(
+                        RichText::new(match state.language {
+                            Language::PtBr => "ACME HTTP-01 (RFC 8555): o DNS do dominio precisa apontar para o IP PUBLICO desta maquina e a porta 80 precisa chegar ate aqui (encaminhamento no roteador + firewall). O app abre um respondedor temporario em 0.0.0.0:80 so durante a emissao. Renovacao automatica com menos de 30 dias. Let's Encrypt nao emite para IP.",
+                            Language::English => "ACME HTTP-01 (RFC 8555): the domain's DNS must point to this machine's PUBLIC IP and port 80 must reach here (router forwarding + firewall). The app opens a temporary responder on 0.0.0.0:80 only during issuance. Auto-renews under 30 days. Let's Encrypt does not issue for IPs.",
+                        })
+                        .size(11.0)
+                        .color(TERM_GRAY),
+                    );
+                }
+                TlsMode::Custom => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(".crt:");
+                        ui.add(egui::TextEdit::singleline(&mut state.tls_custom_cert).desired_width(260.0));
+                        ui.label(".key:");
+                        ui.add(egui::TextEdit::singleline(&mut state.tls_custom_key).desired_width(260.0));
+                    });
+                }
+            }
+
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                let apply = term_button(match state.language {
+                    Language::PtBr => "Aplicar / Reiniciar HTTPS",
+                    Language::English => "Apply / Restart HTTPS",
+                })
+                .min_size(Vec2::new(170.0, 28.0));
+                if ui.add(apply).clicked() {
+                    state.tls_save_cfg();
+                    state.tls_refresh_cert_info();
+                    if state.tls_enabled {
+                        state.start_tls();
+                    }
+                }
+                let test = term_button(match state.language {
+                    Language::PtBr => "Testar HTTPS",
+                    Language::English => "Test HTTPS",
+                })
+                .min_size(Vec2::new(110.0, 28.0));
+                if ui.add(test).clicked() {
+                    state.tls_refresh_cert_info();
+                    state.check_tls_status();
+                }
+                match state.tls_mode {
+                    TlsMode::SelfSigned => {
+                        let regen = term_button_danger(match state.language {
+                            Language::PtBr => "Regenerar auto-assinado",
+                            Language::English => "Regenerate self-signed",
+                        })
+                        .min_size(Vec2::new(170.0, 28.0));
+                        if ui.add(regen).clicked() {
+                            state.tls_regenerate_self_signed();
+                        }
+                    }
+                    TlsMode::LetsEncrypt => {
+                        let issue = term_button(match state.language {
+                            Language::PtBr => "Emitir Let's Encrypt",
+                            Language::English => "Issue Let's Encrypt",
+                        })
+                        .min_size(Vec2::new(150.0, 28.0));
+                        if ui.add_enabled(!state.tls_acme_busy, issue).clicked() {
+                            state.tls_issue_letsencrypt();
+                        }
+                        if state.tls_acme_busy {
+                            ui.label(
+                                RichText::new(match state.language {
+                                    Language::PtBr => "emitindo... (acompanhe no console)",
+                                    Language::English => "issuing... (follow the console)",
+                                })
+                                .size(11.0)
+                                .color(TERM_GRAY),
+                            );
+                        }
+                    }
+                    TlsMode::Custom => {}
+                }
+                let open_dir = term_button(match state.language {
+                    Language::PtBr => "Abrir pasta dos certificados",
+                    Language::English => "Open certificates folder",
+                })
+                .min_size(Vec2::new(180.0, 28.0));
+                if ui.add(open_dir).clicked() {
+                    let dir = state.tls_cert_dir.clone();
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = open::that(&dir);
+                    state.log_debug(&format!("[https] Pasta dos certificados: {}", dir.display()));
+                }
+            });
+
+            if !state.tls_last_error.is_empty() && state.tls_status == TlsStatus::Error {
+                ui.label(RichText::new(&state.tls_last_error).size(11.0).color(ST_ERR));
+            }
+
+            // Certificado REAL em uso (lido do arquivo/do handshake)
+            ui.add_space(6.0);
+            let info = state
+                .tls_probe
+                .as_ref()
+                .and_then(|p| p.cert.clone())
+                .or_else(|| state.tls_cert_info.clone());
+            match info {
+                Some(c) => {
+                    let color = if c.expired() { ST_ERR } else if c.needs_renewal() { ST_WARN } else { ST_OK };
+                    egui::Grid::new("tls_cert_grid").spacing([12.0, 4.0]).show(ui, |ui| {
+                        ui.label(RichText::new(match state.language { Language::PtBr => "Arquivo", Language::English => "File" }).strong().color(TERM_WHITE));
+                        ui.monospace(&state.tls_cert_path);
+                        ui.end_row();
+                        ui.label(RichText::new(match state.language { Language::PtBr => "Emissor", Language::English => "Issuer" }).strong().color(TERM_WHITE));
+                        ui.monospace(if c.self_signed {
+                            match state.language { Language::PtBr => "auto-assinado (o proprio app)".to_string(), Language::English => "self-signed (this app)".to_string() }
+                        } else { c.issuer.clone() });
+                        ui.end_row();
+                        ui.label(RichText::new("SANs").strong().color(TERM_WHITE));
+                        ui.monospace(c.sans.join(", "));
+                        ui.end_row();
+                        ui.label(RichText::new(match state.language { Language::PtBr => "Validade", Language::English => "Validity" }).strong().color(TERM_WHITE));
+                        ui.label(RichText::new(format!("{}  ->  {}  ({} {})", c.not_before, c.not_after, c.days_left, match state.language { Language::PtBr => "dias", Language::English => "days" })).color(color));
+                        ui.end_row();
+                        ui.label(RichText::new("SHA-256").strong().color(TERM_WHITE));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.monospace(&c.sha256_fingerprint);
+                            if ui.button(match state.language { Language::PtBr => "Copiar", Language::English => "Copy" }).clicked() {
+                                ui.output_mut(|o| o.copied_text = c.sha256_fingerprint.clone());
+                            }
+                        });
+                        ui.end_row();
+                    });
+                }
+                None => {
+                    ui.label(
+                        RichText::new(match state.language {
+                            Language::PtBr => "Nenhum certificado carregado para o modo selecionado.",
+                            Language::English => "No certificate loaded for the selected mode.",
+                        })
+                        .size(11.0)
+                        .color(ST_WARN),
+                    );
+                }
+            }
+
+            // URL HTTPS que funciona AGORA
+            if matches!(state.tls_status, TlsStatus::Listening | TlsStatus::ListeningNoMcp) {
+                ui.add_space(6.0);
+                let url = state.tls_url();
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(match state.language {
+                        Language::PtBr => "URL HTTPS (estado real):",
+                        Language::English => "HTTPS URL (actual state):",
+                    });
+                    ui.code(&url);
+                    if ui.button(match state.language { Language::PtBr => "Copiar", Language::English => "Copy" }).clicked() {
+                        ui.output_mut(|o| o.copied_text = url.clone());
+                    }
+                });
+                if let Some(p) = &state.tls_probe {
+                    ui.label(
+                        RichText::new(format!(
+                            "{}: {}  |  HTTP {}  |  JSON-RPC: {}  |  {}: {}",
+                            match state.language { Language::PtBr => "protocolo", Language::English => "protocol" },
+                            p.protocol,
+                            p.http_status,
+                            if p.jsonrpc { "OK" } else { "-" },
+                            match state.language { Language::PtBr => "conexoes aceitas", Language::English => "accepted connections" },
+                            state.tls_accepted
+                        ))
+                        .size(11.0)
+                        .color(TERM_GRAY),
+                    );
+                }
+            }
         });
 }
 
@@ -494,6 +829,23 @@ fn render_diagnostics(ui: &mut Ui, state: &mut AppState) {
                                     .strong(),
                             );
                         }
+                    }
+                    ui.end_row();
+
+                    // Linha HTTPS — mesmo criterio honesto (sonda TLS + JSON-RPC).
+                    ui.label(&state.tls_port);
+                    ui.label(match state.tls_status {
+                        TlsStatus::Listening | TlsStatus::ListeningNoMcp => {
+                            if state.tls_probe_lan_ok { state.lan_ip.trim().to_string() } else { "127.0.0.1 (loopback)".to_string() }
+                        }
+                        _ => "-".to_string(),
+                    });
+                    ui.label(RichText::new("HTTPS / TLS -> HTTP").color(TERM_GREEN));
+                    match state.tls_status {
+                        TlsStatus::Listening => { ui.label(RichText::new("LISTENING (TLS + JSON-RPC)").color(ST_OK).strong()); }
+                        TlsStatus::ListeningNoMcp => { ui.label(RichText::new(match state.language { Language::PtBr => "TLS OK / MOTOR MUDO", Language::English => "TLS OK / ENGINE SILENT" }).color(ST_WARN).strong()); }
+                        TlsStatus::Error => { ui.label(RichText::new(match state.language { Language::PtBr => "ERRO", Language::English => "ERROR" }).color(ST_ERR).strong()); }
+                        TlsStatus::Stopped => { ui.label(RichText::new(match state.language { Language::PtBr => "DESLIGADO", Language::English => "OFF" }).color(ST_WARN).strong()); }
                     }
                     ui.end_row();
                 });

@@ -63,6 +63,36 @@ pub enum TunnelExposure {
     Unknown,
 }
 
+/// Origem do certificado do endpoint HTTPS (ver fzcomputerai/src/tls.rs).
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum TlsMode {
+    /// Gerado pelo app (rcgen) na instalação ou no primeiro run — padrão.
+    SelfSigned,
+    /// Emitido por Let's Encrypt (ACME HTTP-01) para um domínio público.
+    LetsEncrypt,
+    /// Arquivos PEM (.crt/.key) informados pelo usuário.
+    Custom,
+}
+
+/// Em que endereço o listener HTTPS escuta.
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum TlsBind {
+    Loopback,
+    Lan,
+    All,
+}
+
+/// Status HONESTO do HTTPS (mesma doutrina do PortStatus): só fica verde
+/// depois de handshake TLS real + POST initialize com resposta JSON-RPC.
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum TlsStatus {
+    Stopped,
+    /// Listener de pé, mas a sonda não obteve JSON-RPC (motor parado? token?).
+    ListeningNoMcp,
+    Listening,
+    Error,
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 pub struct WindowItem {
     pub pid: u32,
@@ -96,7 +126,7 @@ pub fn quiet_cmd(program: &str) -> Command {
 
 /// Autodetecta o IP da LAN sem enviar nenhum pacote:
 /// UDP connect apenas seleciona a interface de saída.
-fn detect_lan_ip() -> String {
+pub fn detect_lan_ip() -> String {
     let detected = std::net::UdpSocket::bind("0.0.0.0:0").and_then(|sock| {
         sock.connect("8.8.8.8:80")?;
         sock.local_addr()
@@ -284,6 +314,33 @@ pub struct AppState {
     // Identidade forte do processo (marcador na cmdline via path de log).
     pub tunnel_run_id: String,
 
+    // ─── HTTPS do endpoint MCP (terminação TLS no próprio app) ──────────
+    // O motor só fala HTTP em 127.0.0.1. Este listener (tls.rs) escuta em
+    // <bind>:tls_port, termina o TLS e copia bytes para 127.0.0.1:http_port —
+    // mesmo desenho do LAN forward: thread do processo, sem admin, some ao
+    // fechar. Preferências persistidas como tlscfg:* (registro/ini portátil).
+    pub tls_enabled: bool,
+    pub tls_port: String,
+    pub tls_bind: TlsBind,
+    pub tls_mode: TlsMode,
+    pub tls_domain: String,
+    pub tls_email: String,
+    pub tls_staging: bool,
+    pub tls_custom_cert: String,
+    pub tls_custom_key: String,
+    pub tls_status: TlsStatus,
+    pub tls_cert_dir: std::path::PathBuf,
+    pub tls_cert_path: String,
+    pub tls_cert_info: Option<crate::tls::CertInfo>,
+    pub tls_probe: Option<crate::tls::HttpsProbe>,
+    pub tls_probe_lan_ok: bool,
+    pub tls_last_error: String,
+    pub tls_acme_busy: bool,
+    pub tls_accepted: u64,
+    tls_proxy: Option<crate::tls::TlsProxyHandle>,
+    tls_acme_rx: Option<std::sync::mpsc::Receiver<crate::tls::AcmeEvent>>,
+    tls_renew_check: Option<std::time::Instant>,
+
     // Estado interno (privado — só o app.rs mexe).
     tunnel_child: Option<std::process::Child>,
     tunnel_gate_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -380,6 +437,28 @@ impl Default for AppState {
             tunnel_downloading: false,
             tunnel_run_id: String::new(),
 
+            tls_enabled: false,
+            tls_port: crate::tls::DEFAULT_TLS_PORT.to_string(),
+            tls_bind: TlsBind::Lan,
+            tls_mode: TlsMode::SelfSigned,
+            tls_domain: String::new(),
+            tls_email: String::new(),
+            tls_staging: false,
+            tls_custom_cert: String::new(),
+            tls_custom_key: String::new(),
+            tls_status: TlsStatus::Stopped,
+            tls_cert_dir: std::path::PathBuf::new(),
+            tls_cert_path: String::new(),
+            tls_cert_info: None,
+            tls_probe: None,
+            tls_probe_lan_ok: false,
+            tls_last_error: String::new(),
+            tls_acme_busy: false,
+            tls_accepted: 0,
+            tls_proxy: None,
+            tls_acme_rx: None,
+            tls_renew_check: None,
+
             tunnel_child: None,
             tunnel_gate_stop: None,
             tunnel_last_poll: None,
@@ -398,6 +477,9 @@ impl Default for AppState {
         state.check_driver_present();
         state.check_port_status();
         state.daemon_running = state.port_active;
+        // HTTPS: lê preferências, garante o auto-assinado ("na instalação ou no
+        // primeiro run, o que vier primeiro") e sobe o listener se estava ligado.
+        state.tls_startup();
         #[cfg(target_os = "windows")]
         state.read_autostart();
         state.fetch_screen_info();
@@ -716,6 +798,11 @@ impl AppState {
             PortStatus::Stopped => format!("[status] STOPPED — nada respondeu na porta {}.", port),
         };
         self.log_debug(&resumo);
+        // HTTPS faz parte da mesma verificacao (Testar Endpoint / startup):
+        // se o listener existe, sonda TLS + JSON-RPC atras dele tambem.
+        if self.tls_proxy.is_some() {
+            self.check_tls_status();
+        }
     }
 
     /// Grava uma variavel em HKCU\Environment pela via oficial e RELÊ o
@@ -1391,6 +1478,8 @@ impl AppState {
         // O encaminhamento LAN é uma thread deste processo: fechar o app já o
         // encerra. Nada a remover do sistema neste caminho.
         self.stop_lan_forward();
+        // Listener HTTPS: idem — thread do processo, cai junto.
+        self.stop_tls();
 
         // ===================================================================
         // LIMPEZA NATIVA — NUNCA VOLTE A FAZER ISTO COM POWERSHELL OCULTO
@@ -4788,6 +4877,8 @@ impl eframe::App for FzComputerApp {
         // binários de túnel (throttle interno de 1s cada).
         self.state.poll_tunnel();
         self.state.poll_tunnel_download();
+        // HTTPS: progresso da emissão Let's Encrypt e renovação periódica.
+        self.state.poll_tls();
         // ─── BANDEJA (tray) ─────────────────────────────────────────────
         // Sobe o ícone só quando o usuário liga a opção, e derruba quando ele
         // desliga — quem não pediu não ganha ícone na área de notificação.
@@ -4867,6 +4958,7 @@ impl eframe::App for FzComputerApp {
         if self.state.update_downloading
             || self.state.driver_updating
             || self.state.tunnel_downloading
+            || self.state.tls_acme_busy
             || matches!(
                 self.state.tunnel_status,
                 TunnelStatus::Starting | TunnelStatus::Running
@@ -5698,5 +5790,465 @@ impl eframe::App for FzComputerApp {
                 self.state.update_checked = false;
             }
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// HTTPS do endpoint MCP — orquestração (a mecânica TLS/ACME vive em tls.rs)
+// ═══════════════════════════════════════════════════════════════════════
+impl AppState {
+    fn tls_mode_str(m: TlsMode) -> &'static str {
+        match m {
+            TlsMode::SelfSigned => "selfsigned",
+            TlsMode::LetsEncrypt => "letsencrypt",
+            TlsMode::Custom => "custom",
+        }
+    }
+    fn tls_bind_str(b: TlsBind) -> &'static str {
+        match b {
+            TlsBind::Loopback => "loopback",
+            TlsBind::Lan => "lan",
+            TlsBind::All => "all",
+        }
+    }
+
+    /// Lê as preferências tlscfg:* (registro ou .ini portátil).
+    pub fn tls_read_cfg(&mut self) {
+        if let Some(v) = self.cfg_get("tlscfg:enabled") {
+            self.tls_enabled = v == "1";
+        }
+        if let Some(v) = self.cfg_get("tlscfg:port") {
+            if v.parse::<u16>().is_ok() {
+                self.tls_port = v;
+            }
+        }
+        if let Some(v) = self.cfg_get("tlscfg:bind") {
+            self.tls_bind = match v.as_str() {
+                "loopback" => TlsBind::Loopback,
+                "all" => TlsBind::All,
+                _ => TlsBind::Lan,
+            };
+        }
+        if let Some(v) = self.cfg_get("tlscfg:mode") {
+            self.tls_mode = match v.as_str() {
+                "letsencrypt" => TlsMode::LetsEncrypt,
+                "custom" => TlsMode::Custom,
+                _ => TlsMode::SelfSigned,
+            };
+        }
+        if let Some(v) = self.cfg_get("tlscfg:domain") {
+            self.tls_domain = v;
+        }
+        if let Some(v) = self.cfg_get("tlscfg:email") {
+            self.tls_email = v;
+        }
+        if let Some(v) = self.cfg_get("tlscfg:staging") {
+            self.tls_staging = v == "1";
+        }
+        if let Some(v) = self.cfg_get("tlscfg:custom_cert") {
+            self.tls_custom_cert = v;
+        }
+        if let Some(v) = self.cfg_get("tlscfg:custom_key") {
+            self.tls_custom_key = v;
+        }
+    }
+
+    /// Persiste as preferências tlscfg:* (nunca chave privada — só caminhos).
+    pub fn tls_save_cfg(&mut self) {
+        let enabled = if self.tls_enabled { "1" } else { "0" }.to_string();
+        let port = self.tls_port.trim().to_string();
+        let bind = Self::tls_bind_str(self.tls_bind).to_string();
+        let mode = Self::tls_mode_str(self.tls_mode).to_string();
+        let domain = self.tls_domain.trim().to_string();
+        let email = self.tls_email.trim().to_string();
+        let staging = if self.tls_staging { "1" } else { "0" }.to_string();
+        let cc = self.tls_custom_cert.trim().to_string();
+        let ck = self.tls_custom_key.trim().to_string();
+        self.cfg_set("tlscfg:enabled", &enabled);
+        self.cfg_set("tlscfg:port", &port);
+        self.cfg_set("tlscfg:bind", &bind);
+        self.cfg_set("tlscfg:mode", &mode);
+        self.cfg_set("tlscfg:domain", &domain);
+        self.cfg_set("tlscfg:email", &email);
+        self.cfg_set("tlscfg:staging", &staging);
+        self.cfg_set("tlscfg:custom_cert", &cc);
+        self.cfg_set("tlscfg:custom_key", &ck);
+        self.log_debug("[https] Configuracao salva (tlscfg:*).");
+    }
+
+    /// Startup: preferências + auto-assinado garantido + listener se ligado.
+    pub fn tls_startup(&mut self) {
+        self.tls_cert_dir = crate::tls::cert_dir(self.portable_mode);
+        self.tls_read_cfg();
+        // "Na instalação ou no primeiro run, o que vier primeiro": o instalador
+        // chama `--tls-init`; se ele não rodou (portátil, Linux, upgrade
+        // antigo), o primeiro run gera aqui. Idempotente: cert válido que já
+        // cobre os SANs é mantido (o fingerprint não muda à toa).
+        let sans = crate::tls::default_sans(&self.lan_ip, &self.tls_domain);
+        match crate::tls::ensure_self_signed(&self.tls_cert_dir, &sans, false) {
+            Ok((crt, _key, generated)) => {
+                let dir = self.tls_cert_dir.display().to_string();
+                if generated {
+                    self.log_debug(&format!(
+                        "[https] Certificado auto-assinado GERADO em {} (SANs: {}). Ele NAO e instalado em nenhuma store de confianca — o cliente confia pelo fingerprint SHA-256 ou pelo arquivo .crt.",
+                        dir,
+                        sans.join(", ")
+                    ));
+                } else {
+                    self.log_debug(&format!("[https] Certificado auto-assinado presente e valido em {}.", dir));
+                }
+                if let Ok(info) = crate::tls::inspect_cert_file(&crt) {
+                    self.log_debug(&format!(
+                        "[https] auto-assinado: valido ate {} ({} dias) — SHA-256 {}",
+                        info.not_after, info.days_left, info.sha256_fingerprint
+                    ));
+                }
+            }
+            Err(e) => {
+                self.tls_last_error = format!("{e:#}");
+                self.log_debug(&format!("[https] FALHA ao gerar o auto-assinado: {e:#}"));
+            }
+        }
+        self.tls_refresh_cert_info();
+        if self.tls_enabled {
+            self.start_tls();
+        } else {
+            self.log_debug("[https] Listener HTTPS desligado (preferencia). Ligue em MCP & Rede > HTTPS.");
+        }
+    }
+
+    /// Resolve (crt, key) conforme o modo. Não gera nada aqui além do
+    /// auto-assinado (o Let's Encrypt exige emissão explícita).
+    fn tls_resolve_cert(&mut self) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+        let dir = self.tls_cert_dir.clone();
+        match self.tls_mode {
+            TlsMode::SelfSigned => {
+                let sans = crate::tls::default_sans(&self.lan_ip, &self.tls_domain);
+                crate::tls::ensure_self_signed(&dir, &sans, false)
+                    .map(|(c, k, _)| (c, k))
+                    .map_err(|e| format!("{e:#}"))
+            }
+            TlsMode::LetsEncrypt => {
+                let crt = dir.join(crate::tls::ACME_CERT);
+                let key = dir.join(crate::tls::ACME_KEY);
+                if !crt.exists() || !key.exists() {
+                    return Err(self.tr(
+                        "Nenhum certificado Let's Encrypt emitido ainda — clique em \"Emitir Let's Encrypt\".",
+                        "No Let's Encrypt certificate issued yet — click \"Issue Let's Encrypt\".",
+                    ));
+                }
+                match crate::tls::inspect_cert_file(&crt) {
+                    Ok(i) if i.expired() => Err(self.tr(
+                        "O certificado Let's Encrypt EXPIROU — emita de novo.",
+                        "The Let's Encrypt certificate has EXPIRED — issue it again.",
+                    )),
+                    Ok(_) => Ok((crt, key)),
+                    Err(e) => Err(format!("{e:#}")),
+                }
+            }
+            TlsMode::Custom => {
+                let crt = std::path::PathBuf::from(self.tls_custom_cert.trim());
+                let key = std::path::PathBuf::from(self.tls_custom_key.trim());
+                if !crt.is_file() || !key.is_file() {
+                    return Err(self.tr(
+                        "Informe caminhos validos para o .crt e a .key (PEM).",
+                        "Provide valid paths for the .crt and .key (PEM).",
+                    ));
+                }
+                Ok((crt, key))
+            }
+        }
+    }
+
+    fn tls_bind_ip(&self) -> String {
+        match self.tls_bind {
+            TlsBind::Loopback => "127.0.0.1".to_string(),
+            TlsBind::All => "0.0.0.0".to_string(),
+            TlsBind::Lan => {
+                let ip = self.lan_ip.trim();
+                if ip.is_empty() { "0.0.0.0".to_string() } else { ip.to_string() }
+            }
+        }
+    }
+
+    /// Sobe o listener HTTPS. Não mexe no motor nem no LAN forward.
+    pub fn start_tls(&mut self) {
+        self.stop_tls();
+        let tls_port: u16 = match self.tls_port.trim().parse() {
+            Ok(p) => p,
+            Err(_) => {
+                self.tls_status = TlsStatus::Error;
+                self.tls_last_error = self.tr("Porta HTTPS invalida.", "Invalid HTTPS port.");
+                self.log_debug("[https] Porta HTTPS invalida.");
+                return;
+            }
+        };
+        let http_port: u16 = self.http_port.trim().parse().unwrap_or(8000);
+        if tls_port == http_port {
+            self.tls_status = TlsStatus::Error;
+            self.tls_last_error = self.tr(
+                "A porta HTTPS nao pode ser a mesma do HTTP do motor.",
+                "The HTTPS port cannot be the same as the engine's HTTP port.",
+            );
+            self.log_debug("[https] Porta HTTPS igual a porta HTTP do motor — recusado.");
+            return;
+        }
+        let (crt, key) = match self.tls_resolve_cert() {
+            Ok(p) => p,
+            Err(e) => {
+                self.tls_status = TlsStatus::Error;
+                self.log_debug(&format!("[https] Certificado indisponivel: {e}"));
+                self.tls_last_error = e;
+                return;
+            }
+        };
+        let bind = self.tls_bind_ip();
+        match crate::tls::start_tls_proxy(&bind, tls_port, http_port, &crt, &key) {
+            Ok(h) => {
+                self.tls_cert_path = crt.display().to_string();
+                self.tls_proxy = Some(h);
+                self.tls_last_error.clear();
+                self.log_debug(&format!(
+                    "[https] Listener HTTPS ATIVO dentro do app: https://{}:{}/mcp -> http://127.0.0.1:{}/mcp (cert: {}). O bearer token continua obrigatorio.",
+                    bind, tls_port, http_port, crt.display()
+                ));
+                self.tls_refresh_cert_info();
+                self.check_tls_status();
+            }
+            Err(e) => {
+                self.tls_status = TlsStatus::Error;
+                self.tls_last_error = format!("{e:#}");
+                self.log_debug(&format!("[https] FALHA ao subir o listener HTTPS: {e:#}"));
+            }
+        }
+    }
+
+    pub fn stop_tls(&mut self) {
+        if let Some(h) = self.tls_proxy.take() {
+            h.stop();
+            self.log_debug("[https] Listener HTTPS encerrado.");
+        }
+        self.tls_status = TlsStatus::Stopped;
+        self.tls_probe = None;
+        self.tls_probe_lan_ok = false;
+    }
+
+    /// Lê o certificado ATIVO do disco para a tela (SANs, validade, SHA-256).
+    pub fn tls_refresh_cert_info(&mut self) {
+        let path = match self.tls_mode {
+            TlsMode::SelfSigned => self.tls_cert_dir.join(crate::tls::SELF_SIGNED_CERT),
+            TlsMode::LetsEncrypt => self.tls_cert_dir.join(crate::tls::ACME_CERT),
+            TlsMode::Custom => std::path::PathBuf::from(self.tls_custom_cert.trim()),
+        };
+        self.tls_cert_path = path.display().to_string();
+        self.tls_cert_info = crate::tls::inspect_cert_file(&path).ok();
+    }
+
+    /// Sonda REAL do HTTPS: handshake + POST initialize (com o token) em
+    /// 127.0.0.1 e, quando o bind não é loopback, também no IP da LAN.
+    pub fn check_tls_status(&mut self) {
+        let Some(h) = self.tls_proxy.as_ref() else {
+            self.tls_status = TlsStatus::Stopped;
+            self.tls_probe = None;
+            return;
+        };
+        let port = h.port;
+        let bind = h.bind_ip.clone();
+        self.tls_accepted = h.accepted_count();
+        let err = h.take_last_error();
+        if !err.is_empty() {
+            self.log_debug(&format!("[https] Ultimo erro de conexao no listener: {err}"));
+        }
+        let token = self.mcp_token.clone();
+        let sni = if self.tls_domain.trim().is_empty() { "localhost".to_string() } else { self.tls_domain.trim().to_string() };
+
+        // 1) loopback (sempre, quando o bind cobre 127.0.0.1) — senão o IP do bind
+        let local_target = if bind == "127.0.0.1" || bind == "0.0.0.0" { "127.0.0.1".to_string() } else { bind.clone() };
+        let p = crate::tls::probe_https(&local_target, port, &sni, &token);
+        self.log_debug(&format!(
+            "> https-probe {}:{} (SNI {})\n  tls: {}  proto: {}  http: {}  jsonrpc: {}  {}",
+            local_target, port, sni,
+            if p.tls_ok { "OK" } else { "FALHOU" },
+            p.protocol, p.http_status, p.jsonrpc, p.detail
+        ));
+        // 2) LAN, quando o bind é 0.0.0.0 (o IP da LAN é outro endereço).
+        let lan_ip = self.lan_ip.trim().to_string();
+        self.tls_probe_lan_ok = if bind == "0.0.0.0" && lan_ip != "127.0.0.1" && !lan_ip.is_empty() {
+            let pl = crate::tls::probe_https(&lan_ip, port, &sni, &token);
+            self.log_debug(&format!(
+                "> https-probe {}:{}\n  tls: {}  http: {}  jsonrpc: {}",
+                lan_ip, port, if pl.tls_ok { "OK" } else { "FALHOU" }, pl.http_status, pl.jsonrpc
+            ));
+            pl.tls_ok && pl.jsonrpc
+        } else {
+            p.tls_ok && p.jsonrpc && bind != "127.0.0.1"
+        };
+        self.tls_status = if p.tls_ok && p.jsonrpc {
+            TlsStatus::Listening
+        } else if p.tls_ok {
+            TlsStatus::ListeningNoMcp
+        } else {
+            TlsStatus::Error
+        };
+        if p.tls_ok && !p.jsonrpc {
+            self.log_debug(&format!(
+                "[https] TLS OK mas o motor nao respondeu JSON-RPC atras do listener (HTTP {}). Motor parado? Token? O HTTPS so encaminha — ele nao substitui o motor.",
+                p.http_status
+            ));
+        }
+        if let Some(c) = &p.cert {
+            if c.needs_renewal() {
+                self.log_debug(&format!(
+                    "[https] AVISO: o certificado servido expira em {} dias ({}).",
+                    c.days_left, c.not_after
+                ));
+            }
+        }
+        self.tls_probe = Some(p);
+    }
+
+    /// Liga/desliga pelo checkbox: persiste e aplica.
+    pub fn set_tls_enabled(&mut self, on: bool) {
+        self.tls_enabled = on;
+        self.tls_save_cfg();
+        if on { self.start_tls(); } else { self.stop_tls(); }
+    }
+
+    /// Regenera o auto-assinado (novo fingerprint) e recarrega o listener.
+    pub fn tls_regenerate_self_signed(&mut self) {
+        let sans = crate::tls::default_sans(&self.lan_ip, &self.tls_domain);
+        match crate::tls::ensure_self_signed(&self.tls_cert_dir, &sans, true) {
+            Ok((crt, _, _)) => {
+                let fp = crate::tls::inspect_cert_file(&crt).map(|i| i.sha256_fingerprint).unwrap_or_default();
+                self.log_debug(&format!(
+                    "[https] Auto-assinado REGENERADO (SANs: {}). Novo SHA-256: {}. Clientes com pin do fingerprint antigo precisam atualizar. O par anterior ficou em selfsigned.prev.*",
+                    sans.join(", "), fp
+                ));
+                self.status_msg = self.tr("Certificado auto-assinado regenerado.", "Self-signed certificate regenerated.");
+            }
+            Err(e) => {
+                self.tls_last_error = format!("{e:#}");
+                self.log_debug(&format!("[https] FALHA ao regenerar: {e:#}"));
+            }
+        }
+        self.tls_refresh_cert_info();
+        if self.tls_proxy.is_some() && self.tls_mode == TlsMode::SelfSigned {
+            self.start_tls();
+        }
+    }
+
+    /// Dispara a emissão Let's Encrypt (thread + runtime tokio próprio).
+    pub fn tls_issue_letsencrypt(&mut self) {
+        if self.tls_acme_busy {
+            return;
+        }
+        let domain = self.tls_domain.trim().to_string();
+        if domain.is_empty() {
+            self.status_msg = self.tr("Informe o dominio publico antes de emitir.", "Enter the public domain before issuing.");
+            self.log_debug("[acme] Dominio vazio — nada a emitir.");
+            return;
+        }
+        self.tls_save_cfg();
+        self.log_debug(&format!(
+            "[acme] Emissao Let's Encrypt para {} — pre-requisitos: DNS do dominio apontando para o IP publico desta maquina e porta 80 alcancavel da internet (o app abre um respondedor HTTP-01 temporario em 0.0.0.0:80).{}",
+            domain,
+            if self.tls_staging { " MODO STAGING: certificado de TESTE, nao confiavel." } else { "" }
+        ));
+        let rx = crate::tls::acme_issue_async(crate::tls::AcmeRequest {
+            domain,
+            email: self.tls_email.trim().to_string(),
+            staging: self.tls_staging,
+            dir: self.tls_cert_dir.clone(),
+        });
+        self.tls_acme_rx = Some(rx);
+        self.tls_acme_busy = true;
+    }
+
+    /// update(): drena eventos ACME e faz a checagem de renovação (6 em 6 h).
+    pub fn poll_tls(&mut self) {
+        // Eventos da emissão
+        let mut done: Option<anyhow::Result<(std::path::PathBuf, std::path::PathBuf)>> = None;
+        let mut logs = Vec::new();
+        if let Some(rx) = self.tls_acme_rx.as_ref() {
+            loop {
+                match rx.try_recv() {
+                    Ok(crate::tls::AcmeEvent::Log(m)) => logs.push(m),
+                    Ok(crate::tls::AcmeEvent::Done(r)) => { done = Some(r); break; }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        done = Some(Err(anyhow::anyhow!("thread ACME encerrou sem resultado")));
+                        break;
+                    }
+                }
+            }
+        }
+        for m in logs { self.log_debug(&m); }
+        if let Some(r) = done {
+            self.tls_acme_rx = None;
+            self.tls_acme_busy = false;
+            match r {
+                Ok((crt, _)) => {
+                    self.tls_mode = TlsMode::LetsEncrypt;
+                    self.tls_save_cfg();
+                    self.log_debug(&format!("[acme] OK — certificado em {}. Modo trocado para Let's Encrypt.", crt.display()));
+                    self.status_msg = self.tr("Certificado Let's Encrypt emitido.", "Let's Encrypt certificate issued.");
+                    self.tls_refresh_cert_info();
+                    if self.tls_proxy.is_some() || self.tls_enabled {
+                        self.start_tls();
+                    }
+                }
+                Err(e) => {
+                    self.tls_last_error = format!("{e:#}");
+                    self.log_debug(&format!("[acme] FALHOU: {e:#}"));
+                    self.status_msg = self.tr("Emissao Let's Encrypt falhou — veja o console.", "Let's Encrypt issuance failed — see the console.");
+                }
+            }
+        }
+
+        // Renovação automática
+        let due = match self.tls_renew_check {
+            None => true,
+            Some(t) => t.elapsed() > std::time::Duration::from_secs(6 * 3600),
+        };
+        if due {
+            self.tls_renew_check = Some(std::time::Instant::now());
+            if self.tls_proxy.is_some() {
+                self.tls_refresh_cert_info();
+                let needs = self.tls_cert_info.as_ref().map(|i| i.needs_renewal()).unwrap_or(false);
+                if needs {
+                    match self.tls_mode {
+                        TlsMode::SelfSigned => {
+                            self.log_debug("[https] Auto-assinado perto de expirar — regenerando.");
+                            self.tls_regenerate_self_signed();
+                        }
+                        TlsMode::LetsEncrypt => {
+                            self.log_debug("[acme] Certificado Let's Encrypt com menos de 30 dias — renovando.");
+                            self.tls_issue_letsencrypt();
+                        }
+                        TlsMode::Custom => {
+                            self.log_debug("[https] AVISO: o certificado proprio esta perto de expirar — substitua os arquivos.");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// URL HTTPS que FUNCIONA AGORA (mesma doutrina da URL HTTP da tela).
+    pub fn tls_url(&self) -> String {
+        let port = self.tls_port.trim();
+        let host = match self.tls_status {
+            TlsStatus::Listening | TlsStatus::ListeningNoMcp => {
+                if !self.tls_domain.trim().is_empty() && self.tls_mode == TlsMode::LetsEncrypt {
+                    self.tls_domain.trim().to_string()
+                } else if self.tls_probe_lan_ok {
+                    self.lan_ip.trim().to_string()
+                } else {
+                    "127.0.0.1".to_string()
+                }
+            }
+            _ => "127.0.0.1".to_string(),
+        };
+        format!("https://{}:{}/mcp", host, port)
     }
 }

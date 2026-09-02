@@ -89,7 +89,7 @@ Não há nada a fazer na GUI: com a VPN de pé, a outra máquina alcança o IP d
 - a partir da v2.1.1 a GUI **gera** o token: 32 bytes do RNG do Windows (64 caracteres hex), persistidos em `HKCU\Environment` na primeira vez que ela precisa. Você não precisa saber que a variável existe, e a GUI **nunca** imprime o valor no console. Para lê-lo: `reg query "HKCU\Environment" /v CUA_DRIVER_RS_MCP_HTTP_TOKEN`;
 - desde a v2.1.1 quem sobe o motor é a própria GUI, como **processo filho**, com porta e token injetados no ambiente do filho — o token vale já nesta sessão, sem depender de novo logon. A Tarefa Agendada `cua-driver-serve` ficou como último recurso, e ela **herda o ambiente do logon**: token gravado depois de você já ter entrado na sessão só é visto no próximo logon, e até lá o daemon sobe sem token, morre na hora e deixa a porta muda. Por isso, quando é a tarefa que sobe o motor, o console avisa que o processo não é da GUI e que não haverá logs.
 
-**O que a GUI não faz** (e não vai fingir que faz): não cria regra de firewall, não gerencia certificado, não faz rotação de credencial, não registra quem chamou o MCP, e não limita taxa. Se o seu cenário precisa de auditoria e controle de acesso, o lugar disso é a borda ou uma VPN — não este aplicativo.
+**O que a GUI não faz** (e não vai fingir que faz): não cria regra de firewall, não instala certificado em store de confiança (desde a v2.2.0 ela **serve** HTTPS com certificado auto-assinado ou Let's Encrypt — ver [https.md](https.md) — mas a confiança é decidida pelo cliente), não faz rotação de credencial, não registra quem chamou o MCP, e não limita taxa. Se o seu cenário precisa de auditoria e controle de acesso, o lugar disso é a borda ou uma VPN — não este aplicativo.
 
 **Higiene mínima recomendada.** Abra o mínimo pelo menor tempo possível; prefira senha ou Access sempre que a URL for pública; rode a sonda de exposição depois de subir e depois de qualquer mudança; feche o app quando terminar (o encaminhamento e o túnel caem com ele, por design); e olhe o console na abertura — se aparecer "TUNEL ORFAO encerrado", a máquina esteve exposta desde a sessão anterior.
 
@@ -97,5 +97,6 @@ Não há nada a fazer na GUI: com a VPN de pé, a outra máquina alcança o IP d
 
 - [uso-mcp-rede.md](uso-mcp-rede.md) — aplicar porta, encaminhamento LAN e leitura do diagnóstico cru.
 - [uso-tunel.md](uso-tunel.md) — provedores, senha na URL, sonda de exposição e ciclo de vida.
+- [https.md](https.md) — HTTPS na LAN/local sem serviço externo: auto-assinado automático, Let's Encrypt, cert próprio.
 - [arquitetura.md](arquitetura.md) — o transporte MCP e o princípio de status honesto.
 - [faq.md](faq.md) — "o túnel é seguro?", "qual a diferença entre a porta e o encaminhamento?".

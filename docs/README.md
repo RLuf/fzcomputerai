@@ -12,6 +12,7 @@ Para quem vai instalar, operar ou desenvolver o FzComputerAI — a interface gr�
 | --- | --- |
 | [arquitetura.md](arquitetura.md) | Entender a separação GUI x motor, o transporte MCP (stdio e HTTP), o caminho de uma ação do clique até o console, onde vive o estado e o princípio de status honesto. |
 | [uso-mcp-rede.md](uso-mcp-rede.md) | Operar a aba **MCP & Rede**: iniciar/parar/reiniciar o motor, aplicar a porta, testar o endpoint, autostart, ler o diagnóstico cru e resolver o badge "REGRA SEM EFEITO". |
+| [https.md](https.md) | Ligar o **HTTPS do endpoint** (terminação TLS no app): auto-assinado gerado no setup/primeiro run, Let's Encrypt (HTTP-01, renovação automática), certificado próprio, como o cliente confia, limites e solução de problemas. |
 | [uso-tunel.md](uso-tunel.md) | Operar a aba **Túnel**: escolher o provedor (Cloudflare, ngrok, SSH reverso), proteger a URL com senha, verificar a exposição real e entender a limpeza automática. |
 | [acesso-remoto.md](acesso-remoto.md) | Decidir **como** sair do loopback: LAN por encaminhamento, internet por túnel ou VPN — e por que **não existe** bind `0.0.0.0` no motor oficial. |
 | [atualizacao.md](atualizacao.md) | Usar a Central de Atualizações: os dois componentes (GUI e motor), o que é verificado em cada um e o que acontece durante a instalação. |
