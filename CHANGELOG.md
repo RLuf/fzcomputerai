@@ -7,6 +7,11 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [Unreleased]
+
+### Adicionado
+- **CI**: build, testes e clippy a cada push e pull request para a master (Windows + Linux); clippy e fmt não-bloqueantes por enquanto.
+
 ## [2.2.0] - 2026-09-01
 
 ### Adicionado — HTTPS no endpoint MCP (terminação TLS dentro do app)
