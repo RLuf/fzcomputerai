@@ -194,9 +194,6 @@ direto, quando souber exatamente o arquivo.
 - O passo do `cargo clippy` roda com `--locked --all-targets`. No entanto, ele **não é bloqueante** (`continue-on-error: true`) no momento.
 
 - Esta regra de clippy não-bloqueante foi estabelecida para permitir que PRs avancem até que todas as correções manuais de warnings sejam completadas em um PR dedicado. Nenhuma nova supressão genérica de alertas (`#![allow(dead_code)]`) deve ser introduzida para burlar a verificação; warnings restantes devem ser ajustados no código preservando lógica condicional (`cfg(windows)`).
-
-
-
 ---
 ## 🛠️ Comandos Úteis para Agentes
 

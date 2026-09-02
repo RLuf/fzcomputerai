@@ -9,8 +9,8 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ## [Unreleased]
 
-### Added
-- **CI**: build, test, and clippy on `push` and `pull_request` to `master` (Windows + Linux).
+### Adicionado
+- **CI**: build, testes e clippy a cada push e pull request para a master (Windows + Linux); clippy e fmt não-bloqueantes por enquanto.
 
 ## [2.2.0] - 2026-09-01
 
