@@ -188,6 +188,16 @@ direto, quando souber exatamente o arquivo.
 
 ---
 
+### 7. Continuous Integration (CI)
+- O repositório possui um workflow de CI (`.github/workflows/ci.yml`) que executa build, testes e clippy (Windows e Linux) a cada `push` e `pull_request` para a branch `master`.
+
+- O passo do `cargo clippy` roda com `--locked --all-targets`. No entanto, ele **não é bloqueante** (`continue-on-error: true`) no momento.
+
+- Esta regra de clippy não-bloqueante foi estabelecida para permitir que PRs avancem até que todas as correções manuais de warnings sejam completadas em um PR dedicado. Nenhuma nova supressão genérica de alertas (`#![allow(dead_code)]`) deve ser introduzida para burlar a verificação; warnings restantes devem ser ajustados no código preservando lógica condicional (`cfg(windows)`).
+
+
+
+---
 ## 🛠️ Comandos Úteis para Agentes
 
 ### Compilação da GUI Rust
