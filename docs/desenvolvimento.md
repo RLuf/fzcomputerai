@@ -48,7 +48,8 @@ fzcomcontrol/
 │  ├─ make-icon.ps1           gera o .ico e o .rgba (determinístico)
 │  └─ sign-release.ps1        assinatura (ver SIGNING.md)
 ├─ .github/workflows/
-│  └─ build-release.yml       build multiplataforma, ISCC, SHA256, release
+│  ├─ ci.yml                  build + test + clippy (Windows e Linux) em push/PR na master
+│  └─ build-release.yml       build multiplataforma, ISCC, SHA256, release (tag v*)
 ├─ docs/                      esta documentação
 ├─ install.sh                 instalação em Linux/macOS
 ├─ dist/                      saída local do instalador (OutputDir do .iss)
