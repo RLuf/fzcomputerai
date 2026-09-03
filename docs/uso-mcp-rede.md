@@ -12,6 +12,7 @@ Esta é a seção inicial do aplicativo. Ela tem três áreas: **controles do se
 | **Parar** / *Stop* | `cua-driver stop` | refaz o teste do endpoint e atualiza o badge |
 | **Reiniciar** / *Restart* | `cua-driver stop` e, em seguida, `cua-driver serve` como processo filho | idem — é o caminho para **forçar** a troca de processo |
 | **Testar Endpoint** / *Test Endpoint* | nenhum processo — sonda de rede própria | `POST /mcp` em `127.0.0.1` e no IP da LAN + `netstat -ano -p tcp` |
+| *(automático)* vigia de status | thread `fz-status-watch` — `POST initialize` em `127.0.0.1:<porta>` a cada 5 s, fora da thread da UI | quando o resultado **muda** (motor iniciado ou derrubado fora da GUI), roda a mesma verificação do *Testar Endpoint* e loga `[vigia] …`. O badge nunca fica parado num estado velho (v2.3.2) |
 | **Iniciar com Windows** (checkbox) | `reg add`/`reg delete` em `HKCU\...\CurrentVersion\Run`, valor `FzComputerAI` | o checkbox é **relido do registro** depois de gravar, então ele reflete o estado real, não o clique |
 
 O badge à direita do título tem três estados:
@@ -132,7 +133,7 @@ netstat -ano -p tcp | Select-String ":8000"
 Painel na área rolável, acima do diagnóstico. Liga um listener TLS **dentro do app** em `<bind>:8443` que
 encaminha para o motor em `127.0.0.1:<porta>` — mesma mecânica do Encaminhamento LAN (thread do processo,
 sem admin, cai ao fechar). Certificado auto-assinado gerado no setup/primeiro run, Let's Encrypt ou próprio.
-O badge só fica verde após handshake TLS + `POST initialize` reais; **Testar Endpoint** inclui o HTTPS. O
+O badge só fica verde após handshake TLS + `POST initialize` reais; **Testar Endpoint** e o vigia automático (5 s) incluem o HTTPS. O
 bearer token continua obrigatório. Guia completo: [https.md](https.md).
 
 ## 4. Lendo o diagnóstico

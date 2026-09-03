@@ -36,14 +36,14 @@ Aba **MCP & Rede** → painel **HTTPS do endpoint MCP** (na área rolável, acim
 
 1. Marque **Ligar HTTPS**. A preferência é persistida (`tlscfg:*`) e o listener sobe junto com o app nas
    próximas aberturas.
-2. **Porta HTTPS** (padrão `8443` — não pode ser a mesma do HTTP do motor).
+2. **Porta HTTPS** (padrão `8443` — não pode ser a mesma do HTTP do motor). Se a porta estiver ocupada ou reservada pelo sistema (caso medido: `8443` presa pelo PID 4 do Windows, `WSAEACCES`), o app sobe na **próxima livre** entre as 20 seguintes, atualiza a preferência e explica no console.
 3. **Escutar em**: `127.0.0.1` (só esta máquina), `<IP da LAN>` (padrão) ou `0.0.0.0` (todas as interfaces).
 4. Escolha a origem do certificado (abaixo) e clique **Aplicar / Reiniciar HTTPS**.
 
 O badge à direita só fica **verde** depois de uma sonda real: handshake TLS + `POST initialize` JSON-RPC
 atrás do listener. "TLS OK, motor não responde" (amarelo) significa que o TLS está de pé mas o motor não
 respondeu — motor parado, ou token ausente. **Testar Endpoint** (no painel do motor) e **Testar HTTPS** refazem a sonda;
-a verificação de startup também a inclui.
+a verificação de startup também a inclui, e desde a v2.3.2 um vigia em segundo plano reavalia sozinho (a cada 5 s) quando o motor passa a responder ou para — o badge não depende mais de clique.
 
 ## Certificados
 
@@ -75,7 +75,7 @@ confiança é decidida **do lado do cliente**, e a tela dá as duas formas:
 curl --cacert "%APPDATA%\FzComputerAI\tls\selfsigned.crt" \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}' \
-     https://192.168.0.101:8443/mcp
+     https://192.168.0.10:8443/mcp
 
 # (b) por pin do fingerprint SHA-256 (o botão Copiar da tela entrega no formato AA:BB:...)
 curl --pinnedpubkey "sha256//<base64>" ...   # ou o mecanismo de pin do seu cliente
@@ -84,25 +84,45 @@ curl --pinnedpubkey "sha256//<base64>" ...   # ou o mecanismo de pin do seu clie
 Clientes MCP que não têm opção de CA própria (por exemplo alguns conectores hospedados) **não vão aceitar** um
 auto-assinado — use Let's Encrypt.
 
-### 2. Let's Encrypt (ACME, desafio HTTP-01)
+### 2. Let's Encrypt (ACME)
 
-Emite um certificado **confiado por qualquer cliente**, via [`instant-acme`](https://github.com/djc/instant-acme)
-(RFC 8555). Pré-requisitos que **não dá para automatizar** deste lado:
+Emite um certificado **confiado por qualquer cliente** via [`instant-acme`](https://github.com/djc/instant-acme)
+(RFC 8555). Dois desafios:
 
-1. um **nome DNS público** apontando para o **IP público** desta máquina (Let's Encrypt não emite para IP);
+#### 2a. DNS-01 via API do Cloudflare — padrão, e o caminho para **rede interna**
+
+Caso real: a máquina está em `192.168.0.10`, o MCP é usado só na LAN, mas o cliente exige `https://` com
+certificado válido (senão pede confirmação de segurança). Let's Encrypt **não** emite para IP nem para nome de
+máquina sem DNS público — então usa-se um nome numa zona sua no Cloudflare, por exemplo
+`mcp.exemplo.com.br`, apontando para o **IP privado**. A CA só consulta o DNS; nenhuma porta precisa
+estar aberta na internet.
+
+1. No Cloudflare, crie um **API token** com `Zone.DNS:Edit` e `Zone:Read` na zona (`exemplo.com.br`). (template "Edit zone DNS" já traz as duas). O botão **Verificar token** lista as zonas que ele enxerga — o endpoint oficial `/user/tokens/verify` **não** serve para token restrito a zona (responde "Invalid API Token" mesmo com o token bom; medido).
+2. No painel HTTPS: **Let's Encrypt** → desafio **DNS-01 via Cloudflare**. O campo Domínio aceita **vários nomes separados por vírgula** (ex.: `mcp.exemplo.com.br, home.exemplo.com.br` — um interno, um público); todos entram no mesmo certificado. → cole o token → **Verificar token**
+   (mostra a zona encontrada) → preencha **Domínio público** e **E-mail** → deixe marcado **Criar/atualizar
+   registro A -> IP da LAN** → **Aplicar** (grava o token em arquivo) → **Emitir Let's Encrypt**.
+3. Acompanhe o console (`[acme]`): registro A `mcp.exemplo… -> 192.168.0.10`, TXT `_acme-challenge` criado,
+   propagação confirmada no DoH do 1.1.1.1, validação, certificado emitido, TXT removido.
+4. O modo troca sozinho para Let's Encrypt e o listener recarrega. A URL passa a ser
+   `https://mcp.exemplo.com.br:<porta>/mcp` — resolve para o IP da LAN de qualquer máquina da rede.
+
+O token fica em `cloudflare-api-token.txt` (0600) na pasta dos certificados — nunca no registro, log ou console.
+Renovação automática com menos de 30 dias, pelo mesmo caminho (o token precisa continuar válido).
+
+#### 2b. HTTP-01 (porta 80 pública)
+
+Para máquina exposta diretamente na internet. Pré-requisitos que **não dá para automatizar** deste lado:
+
+1. um **nome DNS público** apontando para o **IP público** desta máquina;
 2. a **porta 80** chegando até aqui, vinda da internet (encaminhamento no roteador + regra no firewall). A CA
    busca `http://<dominio>/.well-known/acme-challenge/<token>` — a porta é fixa pelo protocolo.
 
-Passos: selecione **Let's Encrypt**, preencha **Domínio público** e **E-mail** (avisos de expiração), clique
-**Emitir Let's Encrypt** e acompanhe o console (`[acme]`). Durante a emissão o app abre um respondedor
-temporário em `0.0.0.0:80`; ele cai assim que a CA valida. O par vai para `letsencrypt.crt/.key`, a conta
-ACME para `letsencrypt-account.json`, o modo muda sozinho para Let's Encrypt e o listener é recarregado.
+Passos: selecione **HTTP-01**, preencha domínio e e-mail, **Emitir**. Durante a emissão o app abre um
+respondedor temporário em `0.0.0.0:80`; ele cai assim que a CA valida.
 
-- **Renovação automática**: a cada 6 h o app confere a validade; com menos de 30 dias, emite de novo (mesmos
-  pré-requisitos — a porta 80 precisa continuar alcançável).
-- **Staging**: marque para testar contra o ambiente de teste do Let's Encrypt (cert **não** confiável, mas sem
-  gastar o limite de rate da produção — 5 falhas/hora por conta+domínio, 50 certs/semana por domínio).
-- Usar a **porta 443** para o HTTPS (em vez de 8443) é opcional; no Windows não exige admin.
+Comum aos dois: o par vai para `letsencrypt.crt/.key`, a conta ACME para `letsencrypt-account.json`.
+**Staging** testa contra o ambiente de teste do Let's Encrypt (cert **não** confiável, sem gastar o limite de
+rate da produção — 5 falhas/hora por conta+domínio, 50 certs/semana por domínio).
 
 ### 3. Certificado próprio
 
@@ -119,6 +139,40 @@ CA interna da empresa — a confiança, nesse caso, já está distribuída pelos
 | protocolo, HTTP, JSON-RPC, conexões aceitas | resultado da sonda e contador do listener |
 | Linha `HTTPS / TLS -> HTTP` na grade de diagnóstico | mesmo status do badge |
 
+## OAuth 2.1 para conectores (v2.3.0)
+
+Conectores hospedados (Claude.ai, Gemini) e clientes MCP que seguem a
+[especificação de autorização do MCP](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
+não aceitam bearer estático: eles precisam de um servidor OAuth. O app serve um, **dentro do listener HTTPS**,
+na mesma origem do `/mcp`:
+
+| Caminho | Papel |
+| --- | --- |
+| `/.well-known/oauth-protected-resource` | RFC 9728 — diz qual servidor de autorização protege o `/mcp` |
+| `/.well-known/oauth-authorization-server` | RFC 8414 — endpoints, PKCE S256, grants suportados |
+| `/register` | RFC 7591 — o conector registra-se sozinho (sem segredo) |
+| `/authorize` | página que pede a **senha de autorização** do app; emite o `code` |
+| `/token` | `authorization_code` (PKCE obrigatório) e `refresh_token` (com rotação) |
+
+Fluxo real, visto do conector: `POST /mcp` sem credencial → **401** com
+`WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"` → lê os dois metadata →
+`POST /register` → abre `/authorize` no navegador do usuário → você digita a senha de autorização → volta com
+`code` → `POST /token` → recebe `access_token` + `refresh_token` → `POST /mcp` com `Authorization: Bearer
+<access_token>`. O app **troca** esse header pelo bearer do motor ao encaminhar: o conector nunca vê o token do
+motor, o motor nunca vê o token OAuth. Acesso expira em 24 h; o refresh renova (30 dias).
+
+Ligar: painel HTTPS → **OAuth 2.1 para conectores** → **Gerar senha de autorização** (mostrada uma vez; só o
+SHA-256 é gravado). **Revogar todos os conectores** invalida clientes e tokens (a senha fica). Estado em
+`oauth-state.json` (0600) na pasta dos certificados.
+
+Pré-requisitos: HTTPS com certificado que o conector **confie** (Let's Encrypt — auto-assinado não serve para
+Claude.ai/Gemini) e, para conectores na nuvem, a URL precisa ser alcançável da internet (túnel ou
+port-forward); para clientes na LAN, o nome com Let's Encrypt via DNS-01 já basta.
+
+Compatibilidade: requisição com `Authorization: Bearer <token do motor>` continua passando intacta.
+
+Clientes nativos (Claude Code) usam **CIMD** — o `client_id` é a URL do documento de metadata deles — e redirect de **loopback com porta efêmera**; os dois são aceitos (v2.3.1). As preferências HTTPS ficam em `tls-config.json` na pasta dos certificados (o registro é só migração).
+
 ## Configuração nos clientes
 
 ```json
@@ -126,7 +180,7 @@ CA interna da empresa — a confiança, nesse caso, já está distribuída pelos
   "mcpServers": {
     "fzcomputerai": {
       "type": "http",
-      "url": "https://192.168.0.101:8443/mcp",
+      "url": "https://192.168.0.10:8443/mcp",
       "headers": { "Authorization": "Bearer <token>" }
     }
   }
@@ -139,8 +193,8 @@ Com auto-assinado, o cliente precisa aceitar o `.crt` (Node: `NODE_EXTRA_CA_CERT
 ## Limites e decisões
 
 - **HTTP/1.1 apenas** (ALPN `http/1.1`). O motor é HTTP/1.1; sem ganho em anunciar h2.
-- **Sem TLS-ALPN-01 nem DNS-01.** HTTP-01 na porta 80 é o único desafio implementado — é o mais simples de
-  satisfazer num Windows doméstico e não trava a UI esperando o usuário editar DNS.
+- **Sem TLS-ALPN-01.** DNS-01 é só via API do Cloudflare (automático, sem travar a UI esperando o usuário editar
+  DNS à mão); outros provedores de DNS ficam para quando houver caso real.
 - **Chave privada** só no disco (`0600` no unix), nunca no registro, log, console ou linha de comando.
 - **A sonda interna aceita qualquer certificado** (`CaptureVerifier`) — ela existe só para o app conferir a si
   mesmo e capturar o cert servido. Não é um cliente de uso geral.
@@ -155,6 +209,9 @@ Com auto-assinado, o cliente precisa aceitar o `.crt` (Node: `NODE_EXTRA_CA_CERT
 | badge amarelo "TLS OK, motor não responde" | motor parado ou token ausente | **Iniciar** o motor; conferir `CUA_DRIVER_RS_MCP_HTTP_TOKEN` |
 | cliente recusa: *self-signed certificate* / *unable to verify* | esperado com auto-assinado | passar o `.crt` ao cliente ou usar Let's Encrypt |
 | cliente recusa: *hostname mismatch* | você acessou por um nome/IP que não está nos SANs | acesse por um SAN listado, ou preencha *Domínio* e **Regenerar auto-assinado** |
+| `FALHA … nenhuma porta livre entre 8443 e 8463` | faixa inteira reservada/ocupada | escolha outra porta (ex.: 9443) |
+| `[acme] … nenhuma zona do Cloudflare acessível pelo token` | token sem `Zone:Read`/`Zone.DNS:Edit` na zona, ou domínio fora das suas zonas | recrie o token com as duas permissões na zona certa; **Verificar token** mostra o que ele enxerga |
+| `[acme] AVISO: TXT ainda não visível…` seguido de `Invalid` | propagação lenta | clique **Emitir** de novo após 1–2 min |
 | `[acme] FALHOU … escutar em 0.0.0.0:80` | outra coisa na porta 80 (IIS, Apache, Skype antigo) | libere a 80 durante a emissão |
 | `[acme] validação falhou — status Invalid` | DNS não aponta para cá ou porta 80 não chega | testar de fora: `curl http://<dominio>/.well-known/acme-challenge/x` deve dar **404 do app**, não timeout |
 | `[acme] … rateLimited` | limite do Let's Encrypt | esperar; testar com **Staging** |

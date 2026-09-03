@@ -1,6 +1,6 @@
 [package]
 name = "fzcomputerai"
-version = "2.2.0"
+version = "2.3.2"
 edition = "2021"
 authors = ["Roger Luft (VeilWalker) <roger@webstorage.com.br>"]
 description = "Interface Gráfica Nativa em Rust para FzComputerAI & CUA Driver MCP"
@@ -61,3 +61,4 @@ instant-acme = { version = "0.8", default-features = false, features = ["ring", 
 x509-parser = "0.18"
 ring = "0.17"
 time = "0.3"
+rustls-platform-verifier = "0.7"

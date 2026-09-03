@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod oauth;
 mod tabs;
 mod tls;
 mod tray;

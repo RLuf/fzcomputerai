@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "fzcomputerai"
-version = "2.2.0"
+version = "2.3.2"
 dependencies = [
  "anyhow",
  "eframe",
@@ -762,6 +762,7 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-pki-types",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "time",
