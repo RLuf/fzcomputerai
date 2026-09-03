@@ -328,7 +328,24 @@ pub struct AppState {
     pub tls_staging: bool,
     pub tls_custom_cert: String,
     pub tls_custom_key: String,
+    /// Let's Encrypt: DNS-01 via API do Cloudflare (host em rede interna) em
+    /// vez de HTTP-01 (porta 80 pública).
+    pub tls_acme_dns: bool,
+    /// Token da API do Cloudflare digitado (campo .password). Persistido em
+    /// ARQUIVO 0600 (tls::CF_TOKEN_FILE), nunca no registro/log.
+    pub tls_cf_token_input: String,
+    pub tls_cf_token_saved: bool,
+    /// Criar/atualizar o registro A <dominio> -> IP da LAN antes de emitir.
+    pub tls_cf_a_record: bool,
     pub tls_status: TlsStatus,
+    // ─── OAuth 2.1 para conectores (oauth.rs) ───
+    pub oauth_enabled: bool,
+    /// Senha de autorização: mostrada UMA vez ao gerar; só o SHA-256 é gravado.
+    pub oauth_password_shown: String,
+    pub oauth_has_password: bool,
+    pub oauth_clients: usize,
+    pub oauth_tokens: usize,
+    oauth_server: Option<std::sync::Arc<crate::oauth::OAuthServer>>,
     pub tls_cert_dir: std::path::PathBuf,
     pub tls_cert_path: String,
     pub tls_cert_info: Option<crate::tls::CertInfo>,
@@ -340,6 +357,10 @@ pub struct AppState {
     tls_proxy: Option<crate::tls::TlsProxyHandle>,
     tls_acme_rx: Option<std::sync::mpsc::Receiver<crate::tls::AcmeEvent>>,
     tls_renew_check: Option<std::time::Instant>,
+    /// Vigia de status: thread em segundo plano que sonda o motor (127.0.0.1:porta)
+    /// a cada 5 s e avisa a GUI quando o resultado MUDA. Evita o badge "PARADO"
+    /// ficar mentindo quando o motor foi (re)iniciado fora da GUI.
+    status_watch: Option<StatusWatch>,
 
     // Estado interno (privado — só o app.rs mexe).
     tunnel_child: Option<std::process::Child>,
@@ -446,7 +467,17 @@ impl Default for AppState {
             tls_staging: false,
             tls_custom_cert: String::new(),
             tls_custom_key: String::new(),
+            tls_acme_dns: true,
+            tls_cf_token_input: String::new(),
+            tls_cf_token_saved: false,
+            tls_cf_a_record: true,
             tls_status: TlsStatus::Stopped,
+            oauth_enabled: false,
+            oauth_password_shown: String::new(),
+            oauth_has_password: false,
+            oauth_clients: 0,
+            oauth_tokens: 0,
+            oauth_server: None,
             tls_cert_dir: std::path::PathBuf::new(),
             tls_cert_path: String::new(),
             tls_cert_info: None,
@@ -458,6 +489,7 @@ impl Default for AppState {
             tls_proxy: None,
             tls_acme_rx: None,
             tls_renew_check: None,
+            status_watch: None,
 
             tunnel_child: None,
             tunnel_gate_stop: None,
@@ -957,8 +989,11 @@ impl AppState {
         } else {
             #[cfg(target_os = "windows")]
             {
+                // Caminho absoluto: um lancamento com PATH sem System32 fazia
+                // `reg` nao ser encontrado e TODA preferencia virar default.
+                let reg = Self::reg_exe();
                 let out = self.run_logged(
-                    "reg",
+                    &reg,
                     &["query", r"HKCU\Software\FzComputerAI", "/v", key],
                 )?;
                 if !out.status.success() {
@@ -980,6 +1015,12 @@ impl AppState {
                 None
             }
         }
+    }
+
+    /// `reg.exe` pelo caminho absoluto (System32), independente do PATH.
+    fn reg_exe() -> String {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        format!(r"{}\System32\reg.exe", root)
     }
 
     /// Grava uma preferência: arquivo no modo portátil, registro fora dele.
@@ -1019,8 +1060,9 @@ impl AppState {
         } else {
             #[cfg(target_os = "windows")]
             {
+                let reg = Self::reg_exe();
                 let _ = self.run_logged(
-                    "reg",
+                    &reg,
                     &[
                         "add",
                         r"HKCU\Software\FzComputerAI",
@@ -1723,7 +1765,12 @@ impl AppState {
 
     pub fn launch_app(&mut self) {
         let app = self.launch_input.trim().to_string();
-        match self.run_logged("cua-driver", &["call", "launch_app", "--app", app.as_str()]) {
+        // Motor 0.23+: `cua-driver call <tool> <JSON posicional>` — o formato
+        // `--app <nome>` respondia "positional JSON arg did not parse"
+        // (medido em 2026-09-02 no 0.23.2). Vindo de Command (nao de
+        // PowerShell), as aspas do JSON chegam intactas.
+        let json = serde_json::json!({ "app": app }).to_string();
+        match self.run_logged("cua-driver", &["call", "launch_app", json.as_str()]) {
             Some(out) if out.status.success() => {
                 self.status_msg = format!(
                     "launch_app '{}':\n{}",
@@ -4879,6 +4926,9 @@ impl eframe::App for FzComputerApp {
         self.state.poll_tunnel_download();
         // HTTPS: progresso da emissão Let's Encrypt e renovação periódica.
         self.state.poll_tls();
+        // Vigia de status: o badge do motor/HTTPS nunca fica desatualizado
+        // (sonda em segundo plano a cada 5 s; reavalia so quando muda).
+        self.state.poll_status_watch(ctx);
         // ─── BANDEJA (tray) ─────────────────────────────────────────────
         // Sobe o ícone só quando o usuário liga a opção, e derruba quando ele
         // desliga — quem não pediu não ganha ícone na área de notificação.
@@ -5812,8 +5862,42 @@ impl AppState {
         }
     }
 
-    /// Lê as preferências tlscfg:* (registro ou .ini portátil).
+    fn tls_cfg_path(&self) -> std::path::PathBuf {
+        self.tls_cert_dir.join("tls-config.json")
+    }
+
+    /// Lê as preferências HTTPS. Fonte principal: `tls-config.json` na pasta
+    /// dos certificados (não depende de `reg.exe` no PATH — medido em
+    /// 2026-09-03: uma instância do app subiu com auto-assinado e sem OAuth
+    /// apesar do registro correto, porque a leitura via `reg query` falhou
+    /// naquele lançamento e o app caiu nos defaults em silêncio). Registro /
+    /// .ini portátil ficam como fallback de migração.
     pub fn tls_read_cfg(&mut self) {
+        if let Ok(text) = std::fs::read_to_string(self.tls_cfg_path()) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let g = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|s| s.to_string());
+                if let Some(x) = g("enabled") { self.tls_enabled = x == "1"; }
+                if let Some(x) = g("port") { if x.parse::<u16>().is_ok() { self.tls_port = x; } }
+                if let Some(x) = g("bind") { self.tls_bind = match x.as_str() { "loopback" => TlsBind::Loopback, "all" => TlsBind::All, _ => TlsBind::Lan }; }
+                if let Some(x) = g("mode") { self.tls_mode = match x.as_str() { "letsencrypt" => TlsMode::LetsEncrypt, "custom" => TlsMode::Custom, _ => TlsMode::SelfSigned }; }
+                if let Some(x) = g("domain") { self.tls_domain = x; }
+                if let Some(x) = g("email") { self.tls_email = x; }
+                if let Some(x) = g("staging") { self.tls_staging = x == "1"; }
+                if let Some(x) = g("custom_cert") { self.tls_custom_cert = x; }
+                if let Some(x) = g("custom_key") { self.tls_custom_key = x; }
+                if let Some(x) = g("challenge") { self.tls_acme_dns = x != "http01"; }
+                if let Some(x) = g("cf_a_record") { self.tls_cf_a_record = x == "1"; }
+                if let Some(x) = g("oauth") { self.oauth_enabled = x == "1"; }
+                self.tls_cf_token_saved = crate::tls::cf_token_path(&self.tls_cert_dir).exists();
+                self.log_debug(&format!(
+                    "[https] Preferencias lidas de {} (modo {:?}, OAuth {}, HTTPS {}).",
+                    self.tls_cfg_path().display(), self.tls_mode, if self.oauth_enabled { "ligado" } else { "desligado" }, if self.tls_enabled { "ligado" } else { "desligado" }
+                ));
+                return;
+            }
+        }
+        self.log_debug("[https] tls-config.json ausente — lendo preferencias do registro/ini (migracao).");
+        let before = (self.tls_enabled, self.tls_mode, self.oauth_enabled);
         if let Some(v) = self.cfg_get("tlscfg:enabled") {
             self.tls_enabled = v == "1";
         }
@@ -5851,6 +5935,46 @@ impl AppState {
         if let Some(v) = self.cfg_get("tlscfg:custom_key") {
             self.tls_custom_key = v;
         }
+        if let Some(v) = self.cfg_get("tlscfg:challenge") {
+            self.tls_acme_dns = v != "http01";
+        }
+        if let Some(v) = self.cfg_get("tlscfg:cf_a_record") {
+            self.tls_cf_a_record = v == "1";
+        }
+        if let Some(v) = self.cfg_get("tlscfg:oauth") {
+            self.oauth_enabled = v == "1";
+        }
+        self.tls_cf_token_saved = crate::tls::cf_token_path(&self.tls_cert_dir).exists();
+        if self.cfg_get("tlscfg:port").is_none() && self.cfg_get("tlscfg:mode").is_none() {
+            self.log_debug("[https] Nenhuma preferencia encontrada (primeiro uso, ou leitura do registro falhou) — usando defaults: auto-assinado, OAuth desligado.");
+        } else {
+            // Migra para o arquivo, para o proximo startup nao depender do registro.
+            self.tls_write_cfg_file();
+            let _ = before;
+        }
+    }
+
+    /// Grava `tls-config.json` (fonte principal das preferências HTTPS).
+    fn tls_write_cfg_file(&mut self) {
+        let v = serde_json::json!({
+            "enabled": if self.tls_enabled { "1" } else { "0" },
+            "port": self.tls_port.trim(),
+            "bind": Self::tls_bind_str(self.tls_bind),
+            "mode": Self::tls_mode_str(self.tls_mode),
+            "domain": self.tls_domain.trim(),
+            "email": self.tls_email.trim(),
+            "staging": if self.tls_staging { "1" } else { "0" },
+            "custom_cert": self.tls_custom_cert.trim(),
+            "custom_key": self.tls_custom_key.trim(),
+            "challenge": if self.tls_acme_dns { "dns01-cloudflare" } else { "http01" },
+            "cf_a_record": if self.tls_cf_a_record { "1" } else { "0" },
+            "oauth": if self.oauth_enabled { "1" } else { "0" },
+        });
+        let path = self.tls_cfg_path();
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&v).unwrap_or_default()) {
+            self.log_debug(&format!("[https] FALHA ao gravar {}: {e}", path.display()));
+        }
     }
 
     /// Persiste as preferências tlscfg:* (nunca chave privada — só caminhos).
@@ -5873,7 +5997,25 @@ impl AppState {
         self.cfg_set("tlscfg:staging", &staging);
         self.cfg_set("tlscfg:custom_cert", &cc);
         self.cfg_set("tlscfg:custom_key", &ck);
-        self.log_debug("[https] Configuracao salva (tlscfg:*).");
+        let ch = if self.tls_acme_dns { "dns01-cloudflare" } else { "http01" }.to_string();
+        let ar = if self.tls_cf_a_record { "1" } else { "0" }.to_string();
+        self.cfg_set("tlscfg:challenge", &ch);
+        self.cfg_set("tlscfg:cf_a_record", &ar);
+        let oa = if self.oauth_enabled { "1" } else { "0" }.to_string();
+        self.cfg_set("tlscfg:oauth", &oa);
+        // Token do Cloudflare: só em arquivo, e só se o usuário digitou algo.
+        if !self.tls_cf_token_input.trim().is_empty() {
+            match crate::tls::cf_token_save(&self.tls_cert_dir, &self.tls_cf_token_input) {
+                Ok(()) => {
+                    self.tls_cf_token_saved = true;
+                    self.tls_cf_token_input.clear();
+                    self.log_debug("[https] Token da API do Cloudflare gravado em arquivo (valor nao exibido).");
+                }
+                Err(e) => self.log_debug(&format!("[https] FALHA ao gravar o token do Cloudflare: {e:#}")),
+            }
+        }
+        self.tls_write_cfg_file();
+        self.log_debug("[https] Configuracao salva (tls-config.json + tlscfg:*).");
     }
 
     /// Startup: preferências + auto-assinado garantido + listener se ligado.
@@ -5910,11 +6052,89 @@ impl AppState {
             }
         }
         self.tls_refresh_cert_info();
+        self.oauth_load();
         if self.tls_enabled {
             self.start_tls();
         } else {
             self.log_debug("[https] Listener HTTPS desligado (preferencia). Ligue em MCP & Rede > HTTPS.");
         }
+    }
+
+    /// Carrega (ou cria) o estado OAuth da pasta dos certificados.
+    fn oauth_load(&mut self) {
+        let srv = std::sync::Arc::new(crate::oauth::OAuthServer::load(&self.tls_cert_dir));
+        self.oauth_has_password = srv.has_password();
+        self.oauth_clients = srv.clients_count();
+        self.oauth_tokens = srv.tokens_count();
+        self.oauth_server = Some(srv);
+        if self.oauth_enabled {
+            self.log_debug(&format!(
+                "[oauth] OAuth 2.1 LIGADO na frente do /mcp: {} cliente(s) registrado(s), {} token(s) ativo(s), senha de autorizacao {}.",
+                self.oauth_clients,
+                self.oauth_tokens,
+                if self.oauth_has_password { "definida" } else { "NAO definida (gere uma no painel)" }
+            ));
+        }
+    }
+
+    fn oauth_refresh_counters(&mut self) {
+        if let Some(srv) = &self.oauth_server {
+            self.oauth_has_password = srv.has_password();
+            self.oauth_clients = srv.clients_count();
+            self.oauth_tokens = srv.tokens_count();
+        }
+    }
+
+    /// Gera uma senha de autorização nova, grava só o hash e mostra uma vez.
+    pub fn oauth_generate_password(&mut self) {
+        if self.oauth_server.is_none() {
+            self.oauth_load();
+        }
+        let pw = crate::oauth::random_password();
+        if let Some(srv) = &self.oauth_server {
+            srv.set_password(&pw);
+        }
+        self.oauth_password_shown = pw;
+        self.oauth_refresh_counters();
+        self.log_debug("[oauth] Senha de autorizacao gerada (mostrada no painel uma vez; so o SHA-256 fica gravado). Conectores ja autorizados continuam validos.");
+    }
+
+    /// Revoga todos os clientes e tokens OAuth (a senha fica).
+    pub fn oauth_revoke_all(&mut self) {
+        if let Some(srv) = &self.oauth_server {
+            srv.revoke_all();
+        }
+        self.oauth_refresh_counters();
+        self.log_debug("[oauth] Todos os clientes e tokens OAuth foram revogados — cada conector precisa autorizar de novo.");
+    }
+
+    pub fn set_oauth_enabled(&mut self, on: bool) {
+        self.oauth_enabled = on;
+        self.tls_save_cfg();
+        if on && !self.oauth_has_password {
+            self.oauth_generate_password();
+        }
+        if self.tls_proxy.is_some() {
+            self.start_tls();
+        }
+    }
+
+    fn proxy_auth(&mut self) -> Option<std::sync::Arc<crate::tls::ProxyAuth>> {
+        if !self.oauth_enabled {
+            return None;
+        }
+        if self.oauth_server.is_none() {
+            self.oauth_load();
+        }
+        if self.mcp_token.is_empty() {
+            #[cfg(target_os = "windows")]
+            self.read_mcp_token();
+        }
+        if self.mcp_token.is_empty() {
+            self.log_debug("[oauth] AVISO: token do motor desconhecido — o OAuth vai responder o metadata e emitir tokens, mas nao consegue reescrever o Authorization para o motor. Inicie o motor uma vez pela GUI (ela gera o token).");
+        }
+        let srv = self.oauth_server.clone()?;
+        Some(std::sync::Arc::new(crate::tls::ProxyAuth { oauth: srv, motor_token: self.mcp_token.clone() }))
     }
 
     /// Resolve (crt, key) conforme o modo. Não gera nada aqui além do
@@ -6003,8 +6223,21 @@ impl AppState {
             }
         };
         let bind = self.tls_bind_ip();
-        match crate::tls::start_tls_proxy(&bind, tls_port, http_port, &crt, &key) {
-            Ok(h) => {
+        let auth = self.proxy_auth();
+        match crate::tls::start_tls_proxy_fallback(&bind, tls_port, http_port, &crt, &key, auth) {
+            Ok((h, used_port, first_err)) => {
+                if used_port != tls_port {
+                    self.log_debug(&format!(
+                        "[https] Porta {} indisponivel ({}). Usando a proxima livre: {} — preferencia atualizada.",
+                        tls_port,
+                        first_err.unwrap_or_default(),
+                        used_port
+                    ));
+                    self.tls_port = used_port.to_string();
+                    let v = self.tls_port.clone();
+                    self.cfg_set("tlscfg:port", &v);
+                }
+                let tls_port = used_port;
                 self.tls_cert_path = crt.display().to_string();
                 self.tls_proxy = Some(h);
                 self.tls_last_error.clear();
@@ -6060,7 +6293,7 @@ impl AppState {
             self.log_debug(&format!("[https] Ultimo erro de conexao no listener: {err}"));
         }
         let token = self.mcp_token.clone();
-        let sni = if self.tls_domain.trim().is_empty() { "localhost".to_string() } else { self.tls_domain.trim().to_string() };
+        let sni = self.tls_primary_domain().unwrap_or_else(|| "localhost".to_string());
 
         // 1) loopback (sempre, quando o bind cobre 127.0.0.1) — senão o IP do bind
         let local_target = if bind == "127.0.0.1" || bind == "0.0.0.0" { "127.0.0.1".to_string() } else { bind.clone() };
@@ -6150,20 +6383,197 @@ impl AppState {
         }
         self.tls_save_cfg();
         self.log_debug(&format!(
-            "[acme] Emissao Let's Encrypt para {} — pre-requisitos: DNS do dominio apontando para o IP publico desta maquina e porta 80 alcancavel da internet (o app abre um respondedor HTTP-01 temporario em 0.0.0.0:80).{}",
+            "[acme] Emissao Let's Encrypt para {} via {}.{}",
             domain,
+            if self.tls_acme_dns {
+                "DNS-01 (TXT pela API do Cloudflare; funciona com o host em rede interna)"
+            } else {
+                "HTTP-01 (exige DNS -> IP publico desta maquina e porta 80 alcancavel; respondedor temporario em 0.0.0.0:80)"
+            },
             if self.tls_staging { " MODO STAGING: certificado de TESTE, nao confiavel." } else { "" }
         ));
+        let challenge = if self.tls_acme_dns {
+            crate::tls::AcmeChallenge::Dns01Cloudflare
+        } else {
+            crate::tls::AcmeChallenge::Http01
+        };
+        let cf_token = if self.tls_acme_dns { crate::tls::cf_token_load(&self.tls_cert_dir) } else { String::new() };
+        if self.tls_acme_dns && cf_token.is_empty() {
+            self.status_msg = self.tr("DNS-01 exige o token de API do Cloudflare — cole-o e clique Aplicar.", "DNS-01 requires the Cloudflare API token — paste it and click Apply.");
+            self.log_debug("[acme] Token do Cloudflare ausente — nada a emitir.");
+            return;
+        }
+        let lan_ip = self.lan_ip.trim().to_string();
+        let cf_a_record_ip = if self.tls_acme_dns && self.tls_cf_a_record && !lan_ip.is_empty() { Some(lan_ip) } else { None };
         let rx = crate::tls::acme_issue_async(crate::tls::AcmeRequest {
             domain,
             email: self.tls_email.trim().to_string(),
             staging: self.tls_staging,
             dir: self.tls_cert_dir.clone(),
+            challenge,
+            cf_token,
+            cf_a_record_ip,
         });
         self.tls_acme_rx = Some(rx);
         self.tls_acme_busy = true;
     }
 
+    /// Testa o token do Cloudflare (GET /user/tokens/verify) sem alterar nada.
+    pub fn tls_cf_verify_token(&mut self) {
+        let dir = self.tls_cert_dir.clone();
+        let tok = if !self.tls_cf_token_input.trim().is_empty() {
+            self.tls_cf_token_input.trim().to_string()
+        } else {
+            crate::tls::cf_token_load(&dir)
+        };
+        if tok.is_empty() {
+            self.status_msg = self.tr("Nenhum token do Cloudflare informado.", "No Cloudflare token provided.");
+            return;
+        }
+        match crate::tls::cf_verify_token(&tok) {
+            Ok(st) => {
+                self.log_debug(&format!("[https] Token do Cloudflare valido (status: {st})."));
+                let dom = self.tls_domain.trim().to_string();
+                if !dom.is_empty() {
+                    match crate::tls::cf_find_zone(&tok, &dom) {
+                        Ok(z) => self.log_debug(&format!("[https] Zona para {dom}: {} (id {}).", z.name, z.id)),
+                        Err(e) => self.log_debug(&format!("[https] Token valido, mas: {e:#}")),
+                    }
+                }
+                self.status_msg = self.tr("Token do Cloudflare OK.", "Cloudflare token OK.");
+            }
+            Err(e) => {
+                self.log_debug(&format!("[https] Token do Cloudflare INVALIDO: {e:#}"));
+                self.status_msg = self.tr("Token do Cloudflare invalido — veja o console.", "Invalid Cloudflare token — see the console.");
+            }
+        }
+    }
+
+}
+
+/// Canal do vigia de status (ver `AppState::poll_status_watch`).
+pub struct StatusWatch {
+    rx: std::sync::mpsc::Receiver<bool>,
+    /// (porta, token) que a thread usa — atualizado pela GUI quando muda.
+    target: std::sync::Arc<std::sync::Mutex<(u16, String)>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_known: Option<bool>,
+}
+
+impl Drop for StatusWatch {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Sonda leve e SEM estado: POST initialize em `ip:porta` (mesma verificação
+/// do `mcp_probe`, mas sem tocar no log da GUI — roda fora da thread da UI).
+pub fn probe_mcp_quiet(ip: &str, port: u16, token: &str) -> bool {
+    use std::io::{Read, Write};
+    let addr: std::net::SocketAddr = match format!("{}:{}", ip, port).parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let timeout = std::time::Duration::from_millis(1200);
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, timeout) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    let body = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fzcomputerai-gui-watch","version":""#,
+        env!("CARGO_PKG_VERSION"),
+        r#""}}}"#
+    );
+    let auth = if token.trim().is_empty() {
+        String::new()
+    } else {
+        format!("Authorization: Bearer {}\r\n", token.trim())
+    };
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        ip, port, auth, body.len(), body
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut collected: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 1024];
+    while collected.len() < 4096 {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => collected.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&collected).contains("jsonrpc")
+}
+
+impl AppState {
+    /// Sobe (uma vez) a thread do vigia de status e, a cada frame, consome o
+    /// resultado dela. Quando o motor passa a responder (ou para de responder)
+    /// sem que a GUI tenha feito nada — iniciado à mão, caiu, reiniciado por
+    /// outro cliente — roda a verificação completa (`check_port_status`, com
+    /// netstat e HTTPS) para os badges refletirem a realidade em até ~5 s.
+    pub fn poll_status_watch(&mut self, ctx: &egui::Context) {
+        let port: u16 = self.http_port.trim().parse().unwrap_or(0);
+        if self.status_watch.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel::<bool>();
+            let target = std::sync::Arc::new(std::sync::Mutex::new((port, self.mcp_token.clone())));
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let t2 = std::sync::Arc::clone(&target);
+            let s2 = std::sync::Arc::clone(&stop);
+            let ctx2 = ctx.clone();
+            std::thread::Builder::new()
+                .name("fz-status-watch".into())
+                .spawn(move || {
+                    // Primeira sonda logo após subir; depois a cada 5 s.
+                    let mut wait = std::time::Duration::from_millis(1500);
+                    loop {
+                        std::thread::sleep(wait);
+                        wait = std::time::Duration::from_secs(5);
+                        if s2.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        let (p, tok) = t2.lock().map(|g| g.clone()).unwrap_or((0, String::new()));
+                        let ok = p != 0 && probe_mcp_quiet("127.0.0.1", p, &tok);
+                        if tx.send(ok).is_err() {
+                            break;
+                        }
+                        ctx2.request_repaint();
+                    }
+                })
+                .ok();
+            self.status_watch = Some(StatusWatch { rx, target, stop, last_known: None });
+        }
+
+        let Some(w) = self.status_watch.as_mut() else { return };
+        if let Ok(mut g) = w.target.lock() {
+            if g.0 != port || g.1 != self.mcp_token {
+                *g = (port, self.mcp_token.clone());
+            }
+        }
+        let mut latest: Option<bool> = None;
+        while let Ok(v) = w.rx.try_recv() {
+            latest = Some(v);
+        }
+        let Some(ok) = latest else { return };
+        let gui_thinks_up = !matches!(self.port_status, PortStatus::Stopped);
+        let changed = w.last_known != Some(ok);
+        w.last_known = Some(ok);
+        if ok != gui_thinks_up || (changed && !ok) {
+            self.log_debug(&format!(
+                "[vigia] motor em 127.0.0.1:{} {} — reavaliando status completo.",
+                port,
+                if ok { "RESPONDEU (estava marcado como parado)" } else { "PAROU de responder" }
+            ));
+            self.check_port_status();
+            self.daemon_running = self.port_active;
+        }
+    }
+}
+
+impl AppState {
     /// update(): drena eventos ACME e faz a checagem de renovação (6 em 6 h).
     pub fn poll_tls(&mut self) {
         // Eventos da emissão
@@ -6212,6 +6622,7 @@ impl AppState {
         };
         if due {
             self.tls_renew_check = Some(std::time::Instant::now());
+            self.oauth_refresh_counters();
             if self.tls_proxy.is_some() {
                 self.tls_refresh_cert_info();
                 let needs = self.tls_cert_info.as_ref().map(|i| i.needs_renewal()).unwrap_or(false);
@@ -6234,13 +6645,18 @@ impl AppState {
         }
     }
 
+    /// Primeiro nome do campo Domínio (aceita vários separados por vírgula).
+    pub fn tls_primary_domain(&self) -> Option<String> {
+        self.tls_domain.split(|c: char| c == ',' || c == ' ' || c == ';').map(|d| d.trim().to_lowercase()).find(|d| !d.is_empty())
+    }
+
     /// URL HTTPS que FUNCIONA AGORA (mesma doutrina da URL HTTP da tela).
     pub fn tls_url(&self) -> String {
         let port = self.tls_port.trim();
         let host = match self.tls_status {
             TlsStatus::Listening | TlsStatus::ListeningNoMcp => {
-                if !self.tls_domain.trim().is_empty() && self.tls_mode == TlsMode::LetsEncrypt {
-                    self.tls_domain.trim().to_string()
+                if self.tls_primary_domain().is_some() && self.tls_mode == TlsMode::LetsEncrypt {
+                    self.tls_primary_domain().unwrap_or_default()
                 } else if self.tls_probe_lan_ok {
                     self.lan_ip.trim().to_string()
                 } else {

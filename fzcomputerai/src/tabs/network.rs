@@ -181,8 +181,8 @@ fn render_https(ui: &mut Ui, state: &mut AppState) {
                 TlsMode::LetsEncrypt => {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(match state.language {
-                            Language::PtBr => "Dominio publico:",
-                            Language::English => "Public domain:",
+                            Language::PtBr => "Dominio(s) publico(s), separados por virgula:",
+                            Language::English => "Public domain(s), comma-separated:",
                         });
                         ui.add(egui::TextEdit::singleline(&mut state.tls_domain).desired_width(200.0));
                         ui.label("E-mail:");
@@ -195,14 +195,53 @@ fn render_https(ui: &mut Ui, state: &mut AppState) {
                             },
                         );
                     });
-                    ui.label(
-                        RichText::new(match state.language {
-                            Language::PtBr => "ACME HTTP-01 (RFC 8555): o DNS do dominio precisa apontar para o IP PUBLICO desta maquina e a porta 80 precisa chegar ate aqui (encaminhamento no roteador + firewall). O app abre um respondedor temporario em 0.0.0.0:80 so durante a emissao. Renovacao automatica com menos de 30 dias. Let's Encrypt nao emite para IP.",
-                            Language::English => "ACME HTTP-01 (RFC 8555): the domain's DNS must point to this machine's PUBLIC IP and port 80 must reach here (router forwarding + firewall). The app opens a temporary responder on 0.0.0.0:80 only during issuance. Auto-renews under 30 days. Let's Encrypt does not issue for IPs.",
-                        })
-                        .size(11.0)
-                        .color(TERM_GRAY),
-                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(match state.language {
+                            Language::PtBr => "Desafio:",
+                            Language::English => "Challenge:",
+                        });
+                        ui.selectable_value(&mut state.tls_acme_dns, true, match state.language {
+                            Language::PtBr => "DNS-01 via Cloudflare (rede interna)",
+                            Language::English => "DNS-01 via Cloudflare (internal network)",
+                        });
+                        ui.selectable_value(&mut state.tls_acme_dns, false, match state.language {
+                            Language::PtBr => "HTTP-01 (porta 80 publica)",
+                            Language::English => "HTTP-01 (public port 80)",
+                        });
+                    });
+                    if state.tls_acme_dns {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(match state.language {
+                                Language::PtBr => "Token API Cloudflare (Zone.DNS:Edit):",
+                                Language::English => "Cloudflare API token (Zone.DNS:Edit):",
+                            });
+                            ui.add(egui::TextEdit::singleline(&mut state.tls_cf_token_input).password(true).desired_width(260.0).hint_text(if state.tls_cf_token_saved { "(salvo em arquivo — cole para trocar)" } else { "cole o token" }));
+                            if ui.button(match state.language { Language::PtBr => "Verificar token", Language::English => "Verify token" }).clicked() {
+                                state.tls_cf_verify_token();
+                            }
+                            ui.checkbox(&mut state.tls_cf_a_record, match state.language {
+                                Language::PtBr => "Criar/atualizar registro A -> IP da LAN",
+                                Language::English => "Create/update A record -> LAN IP",
+                            });
+                        });
+                        ui.label(
+                            RichText::new(match state.language {
+                                Language::PtBr => "DNS-01: o app cria o TXT _acme-challenge na zona do Cloudflare pela API, espera propagar, valida e remove. Nao precisa de porta aberta: o dominio pode apontar para o IP privado da LAN (registro A criado pelo app). O token fica em arquivo 0600 na pasta dos certificados, nunca no registro nem no console. Renovacao automatica com menos de 30 dias.",
+                                Language::English => "DNS-01: the app creates the _acme-challenge TXT in the Cloudflare zone via API, waits for propagation, validates and removes it. No open port needed: the domain may point to the private LAN IP (A record created by the app). The token is stored in a 0600 file in the certificates folder, never in the registry or console. Auto-renews under 30 days.",
+                            })
+                            .size(11.0)
+                            .color(TERM_GRAY),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(match state.language {
+                                Language::PtBr => "ACME HTTP-01 (RFC 8555): o DNS do dominio precisa apontar para o IP PUBLICO desta maquina e a porta 80 precisa chegar ate aqui (encaminhamento no roteador + firewall). O app abre um respondedor temporario em 0.0.0.0:80 so durante a emissao. Renovacao automatica com menos de 30 dias. Let's Encrypt nao emite para IP nem para nome de maquina sem DNS publico.",
+                                Language::English => "ACME HTTP-01 (RFC 8555): the domain's DNS must point to this machine's PUBLIC IP and port 80 must reach here (router forwarding + firewall). The app opens a temporary responder on 0.0.0.0:80 only during issuance. Auto-renews under 30 days. Let's Encrypt does not issue for IPs or machine names without public DNS.",
+                            })
+                            .size(11.0)
+                            .color(TERM_GRAY),
+                        );
+                    }
                 }
                 TlsMode::Custom => {
                     ui.horizontal_wrapped(|ui| {
@@ -282,6 +321,80 @@ fn render_https(ui: &mut Ui, state: &mut AppState) {
                     state.log_debug(&format!("[https] Pasta dos certificados: {}", dir.display()));
                 }
             });
+
+            // ─── OAuth 2.1 para conectores ───
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                let mut oa = state.oauth_enabled;
+                if ui
+                    .checkbox(&mut oa, match state.language {
+                        Language::PtBr => "OAuth 2.1 para conectores (Claude.ai, Gemini, clientes MCP com login)",
+                        Language::English => "OAuth 2.1 for connectors (Claude.ai, Gemini, MCP clients with login)",
+                    })
+                    .changed()
+                {
+                    state.set_oauth_enabled(oa);
+                }
+            });
+            if state.oauth_enabled {
+                ui.label(
+                    RichText::new(match state.language {
+                        Language::PtBr => "O conector descobre /.well-known/oauth-authorization-server, registra-se sozinho, abre a pagina /authorize (pede a SENHA DE AUTORIZACAO abaixo) e recebe um token proprio. O app troca esse token pelo bearer do motor ao encaminhar — o conector nunca ve o token do motor. Precisa do HTTPS com certificado que o conector confie (Let's Encrypt).",
+                        Language::English => "The connector discovers /.well-known/oauth-authorization-server, registers itself, opens the /authorize page (asks for the AUTHORIZATION PASSWORD below) and gets its own token. The app swaps that token for the engine bearer when forwarding — the connector never sees the engine token. Requires HTTPS with a certificate the connector trusts (Let's Encrypt).",
+                    })
+                    .size(11.0)
+                    .color(TERM_GRAY),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    let gen = term_button(match state.language {
+                        Language::PtBr => if state.oauth_has_password { "Gerar nova senha de autorizacao" } else { "Gerar senha de autorizacao" },
+                        Language::English => if state.oauth_has_password { "Generate new authorization password" } else { "Generate authorization password" },
+                    })
+                    .min_size(Vec2::new(210.0, 28.0));
+                    if ui.add(gen).clicked() {
+                        state.oauth_generate_password();
+                    }
+                    let revoke = term_button_danger(match state.language {
+                        Language::PtBr => "Revogar todos os conectores",
+                        Language::English => "Revoke all connectors",
+                    })
+                    .min_size(Vec2::new(180.0, 28.0));
+                    if ui.add(revoke).clicked() {
+                        state.oauth_revoke_all();
+                    }
+                    ui.label(
+                        RichText::new(format!(
+                            "{}: {}   {}: {}",
+                            match state.language { Language::PtBr => "conectores", Language::English => "connectors" },
+                            state.oauth_clients,
+                            match state.language { Language::PtBr => "tokens ativos", Language::English => "active tokens" },
+                            state.oauth_tokens
+                        ))
+                        .size(11.0)
+                        .color(TERM_GRAY),
+                    );
+                });
+                if !state.oauth_password_shown.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(match state.language {
+                            Language::PtBr => "Senha de autorizacao (mostrada UMA vez — guarde):",
+                            Language::English => "Authorization password (shown ONCE — keep it):",
+                        }).color(ST_WARN));
+                        ui.code(&state.oauth_password_shown);
+                        if ui.button(match state.language { Language::PtBr => "Copiar", Language::English => "Copy" }).clicked() {
+                            ui.output_mut(|o| o.copied_text = state.oauth_password_shown.clone());
+                        }
+                        if ui.button(match state.language { Language::PtBr => "Ocultar", Language::English => "Hide" }).clicked() {
+                            state.oauth_password_shown.clear();
+                        }
+                    });
+                } else if !state.oauth_has_password {
+                    ui.label(RichText::new(match state.language {
+                        Language::PtBr => "Sem senha de autorizacao: nenhum conector consegue autorizar. Gere uma.",
+                        Language::English => "No authorization password: no connector can authorize. Generate one.",
+                    }).size(11.0).color(ST_ERR));
+                }
+            }
 
             if !state.tls_last_error.is_empty() && state.tls_status == TlsStatus::Error {
                 ui.label(RichText::new(&state.tls_last_error).size(11.0).color(ST_ERR));

@@ -7,10 +7,48 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
-## [Unreleased]
+## [2.3.2] - 2026-09-03
+
+> Correção saída do teste com o **Claude Code conectado de verdade** (OAuth + 57 ferramentas) enquanto a tela do app dizia **"PARADO"**.
+
+### Corrigido
+- **Badge de status desatualizado**: o estado do motor/HTTPS só era reavaliado no startup e no botão *Testar Endpoint*. Motor iniciado (ou derrubado) fora da GUI — à mão, por outro cliente, por reinício — deixava o painel mentindo. Agora um **vigia em segundo plano** (`fz-status-watch`) faz um `initialize` leve em `127.0.0.1:<porta>` a cada 5 s, fora da thread da interface (nunca trava a UI), e só quando o resultado **muda** dispara a verificação completa (netstat + HTTPS) e registra no console `[vigia] motor … RESPONDEU/PAROU`. O badge passa a refletir a realidade em até ~5 s, sem clique.
+
+### Documentação
+- `docs/https.md` e `docs/solucao-de-problemas.md`: **cliente em outra máquina** (Claude Code via SSH/servidor). O redirect de loopback do OAuth cai no `localhost` do desktop e o cliente fica esperando; procedimento de colar a URL do callback no Claude Code (`complete_authentication`), medido em 2026-09-03 com Claude Code remoto → app na LAN via NAT na 8444. `docs/https.md` também passa a mostrar a configuração de cliente **sem** `headers` quando o OAuth está ligado.
+
+## [2.3.1] - 2026-09-03
+
+> Correções do **teste com clientes reais** (Claude Code, Claude Desktop, ChatGPT/Codex) contra a referência de autenticação da Anthropic.
+
+### Corrigido
+- **Preferências HTTPS não dependem mais do `reg.exe`**: uma instância do app subiu com auto-assinado e OAuth desligado apesar do registro correto (medido em 2026-09-03: `reg query` falhou naquele lançamento e o app caiu nos defaults em silêncio). Agora a fonte principal é `tls-config.json` na pasta dos certificados; registro/ini viram fallback de migração; `reg.exe` é chamado pelo caminho absoluto de System32; e o console avisa quando nenhuma preferência foi encontrada.
+- **Redirect de loopback ignora a porta** (RFC 8252 §7.3): o Claude Code declara `http://localhost/callback` e usa uma porta efêmera por sessão — a comparação exata recusava. A página de autorização avisa quando o retorno é loopback.
+- **Client ID Metadata Document (CIMD)**: `client_id` que é uma URL https (ex.: `https://claude.ai/oauth/claude-code-client-metadata`) é buscado, validado (`client_id` do documento = a própria URL) e registrado automaticamente; metadata anuncia `client_id_metadata_document_supported: true`. Sem isso o Claude Code caía em "Cliente desconhecido".
+- Metadata: `scopes_supported` inclui `offline_access` (refresh token) e `resource_indicators_supported`.
+
+## [2.3.0] - 2026-09-02
+
+> Correções que saíram do **teste real na máquina de referência** (instalador v2.2.0 executado de verdade: GUI 2.2.0, motor 0.23.2, skills relinkados, certificado gerado no setup com SANs `127.0.0.1`, `192.168.0.10`, `localhost`).
 
 ### Adicionado
-- **CI**: build, testes e clippy a cada push e pull request para a master (Windows + Linux); clippy e fmt não-bloqueantes por enquanto.
+- **OAuth 2.1 para conectores** (`fzcomputerai/src/oauth.rs`, servido dentro do listener HTTPS): conectores hospedados (Claude.ai, Gemini) e clientes MCP que seguem a especificação de autorização não aceitam bearer estático — eles descobrem o servidor por metadata, registram-se sozinhos e fazem authorization-code com PKCE. Agora o app responde `/.well-known/oauth-protected-resource` (RFC 9728), `/.well-known/oauth-authorization-server` (RFC 8414), `/register` (RFC 7591), `/authorize` (página que pede a **senha de autorização** do app) e `/token` (authorization_code com PKCE S256 obrigatório + refresh_token com rotação). `/mcp` sem `Authorization` recebe 401 com `WWW-Authenticate: Bearer resource_metadata=…` — é assim que o conector descobre o OAuth. O token OAuth é aleatório e vive só no app: o proxy **troca** `Authorization: Bearer <token OAuth>` pelo bearer do **motor** antes de encaminhar — o conector nunca vê o token do motor, e o token do motor direto continua funcionando (compatibilidade). Estado (clientes, códigos, tokens, SHA-256 da senha) em `oauth-state.json` 0600 na pasta dos certificados; nada no registro nem em log. Painel HTTPS: checkbox **OAuth 2.1**, **Gerar senha de autorização** (mostrada uma vez), **Revogar todos os conectores**, contadores.
+- Testes: `oauth::` (fluxo completo: metadata, register, senha errada/certa, PKCE errado/certo, refresh com rotação, persistência, revogação) e `tls::oauth_through_proxy_end_to_end` (tudo atravessando o proxy TLS com motor falso que só aceita o bearer do motor).
+- **Let's Encrypt por DNS-01 via API do Cloudflare** — para o caso real: máquina em rede interna (`192.168.0.10`) que precisa de certificado **confiável** num nome como `mcp.exemplo.com.br`. O app cria o TXT `_acme-challenge.<domínio>` na zona pela API, espera o DNS público (DoH do 1.1.1.1) enxergar, valida, finaliza e **remove o TXT** (sucesso ou falha). **Não precisa de porta aberta**: o registro A pode apontar para o IP privado da LAN — a CA só consulta o DNS. Opção **"Criar/atualizar registro A -> IP da LAN"** faz isso pelo app. Token de API (Zone.DNS:Edit + Zone:Read) fica em **arquivo 0600** na pasta dos certificados (`cloudflare-api-token.txt`), nunca no registro, log, console ou argv; botão **Verificar token** confere sem alterar nada. DNS-01 é o padrão; HTTP-01 (porta 80) continua disponível.
+- Cliente HTTPS mínimo interno (`rustls` + verificador de raízes do **sistema**, `rustls-platform-verifier`, já dependência transitiva) para as chamadas curtas da API do Cloudflare e do DoH — sem cliente HTTP novo.
+- Teste de rede real (`cargo test tls:: -- --include-ignored`): DoH respondendo os NS de `cloudflare.com`, erro JSON do Cloudflare tratado com token inválido, token real restrito a zona validado e zona resolvida.
+- **Emissão real executada em 2026-09-02** com o mesmo `tls.rs` (produção, não staging): registro A `<host> -> <IP privado da LAN>` criado, TXT criado → visível no 1.1.1.1 → validado → **certificado Let's Encrypt emitido (89 dias)** → TXT removido. Nenhuma porta aberta.
+
+### Corrigido (também)
+- **Verificar token** usava `GET /user/tokens/verify`, que responde `1000 Invalid API Token` para um token restrito a "Edit zone DNS" (medido) — mesmo com o token funcionando. Agora a prova é `GET /zones`: se enxerga ao menos uma zona, serve.
+
+### Corrigido
+- **Porta HTTPS ocupada não é mais beco sem saída.** Medido na máquina de referência: a **8443 estava reservada pelo sistema** (listener do PID 4 em `[::]:8443`; `bind` falhava com `WSAEACCES` em 127.0.0.1, no IP da LAN e em 0.0.0.0) e o app só mostrava ERRO. Agora, se a porta configurada falhar, o app tenta as **20 seguintes** (pulando a porta HTTP do motor), sobe na primeira livre, **atualiza a preferência** e explica no console qual porta ficou e por quê.
+- **Vários nomes no mesmo certificado**: o campo Domínio aceita lista separada por vírgula (ex.: nome interno + nome público); todos entram como SANs do Let's Encrypt (um TXT por nome). O primeiro é o principal (registro A, SNI da sonda, URL). Caso real: `ERR_TLS_CERT_ALTNAME_INVALID` ao acessar pelo nome público com cert emitido só para o nome da LAN.
+- **OAuth com o motor parado**: o listener conectava no motor antes de ler a requisição; com o motor parado a conexão era resetada até para o metadata OAuth (medido após reinstalação limpa). Agora, com OAuth ligado, metadata/registro/token respondem sem motor e o `/mcp` devolve 503 JSON-RPC explicando "motor parado".
+- Aba **Janelas → Iniciar App** estava quebrada com o motor 0.23 (`cua-driver call launch_app --app X` → "positional JSON arg did not parse"; medido). Agora envia o JSON posicional `{"app":"X"}`.
+- Texto do HTTP-01 deixa claro que Let's Encrypt não emite para **nome de máquina sem DNS público** (pergunta real do teste).
+- CHANGELOG: a entrada "[Unreleased] CI" foi movida para a 2.2.0, onde o workflow de fato entrou (a tag v2.2.0 já o continha).
 
 ## [2.2.0] - 2026-09-01
 
@@ -23,6 +61,9 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 - **`fzcomputerai --tls-init [--portable]`**: modo de linha de comando sem janela que gera o auto-assinado e grava `tls-init.log` na pasta dos certificados (exit 0/1). É o que o instalador chama; serve para scripts.
 - **`verify-install.ps1`** ganhou o passo 8: presença, validade e SHA-256 do certificado gerado no setup.
 - Documentação nova: [`docs/https.md`](docs/https.md) (como ligar, como o cliente confia — `--cacert`/pin do SHA-256 —, Let's Encrypt passo a passo, limites e solução de problemas).
+
+### Adicionado (CI — por Jules, PR #4 dentro do #3)
+- **CI** (`.github/workflows/ci.yml`): build, testes e clippy a cada push e pull request para a master (Windows + Linux); clippy e fmt não-bloqueantes por enquanto.
 
 ### Alterado
 - Aba **MCP & Rede**: novo painel **HTTPS do endpoint MCP** na área rolável, acima do diagnóstico — os controles fixos que já funcionavam (motor, porta, encaminhamento LAN) não mudaram de lugar nem de comportamento.
@@ -67,7 +108,7 @@ Desinstalar → instalar (setup baixado do release) → abrir → Iniciar → Ap
 | --- | --- |
 | Instalar | `exit 0`, 17 arquivos, versão `2.1.1.0` |
 | Motor / skills | `VERIFICACAO OK: cua-driver 0.17.0` · `pacote de skills instalado/linkado` |
-| IPs | `127.0.0.1:8000` **HTTP 200** · `192.168.0.101:8000` **HTTP 200** · netsh: **nenhuma regra** |
+| IPs | `127.0.0.1:8000` **HTTP 200** · `192.168.0.10:8000` **HTTP 200** · netsh: **nenhuma regra** |
 | Fechar | app encerrado, **as duas portas fecharam junto**, nada deixado no sistema |
 | Desinstalar | `exit 0`, **0 arquivos**, `Run` ausente, **motor preservado** (design) |
 | Defender | 16 detecções antes e depois — **nenhuma nova** |
