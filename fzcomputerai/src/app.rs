@@ -345,6 +345,8 @@ pub struct AppState {
     pub oauth_has_password: bool,
     pub oauth_clients: usize,
     pub oauth_tokens: usize,
+    /// Client ID do Cloudflare Access (OIDC) quando `cloudflare-oidc.json` existe.
+    pub oauth_oidc_client: Option<String>,
     oauth_server: Option<std::sync::Arc<crate::oauth::OAuthServer>>,
     pub tls_cert_dir: std::path::PathBuf,
     pub tls_cert_path: String,
@@ -477,6 +479,7 @@ impl Default for AppState {
             oauth_has_password: false,
             oauth_clients: 0,
             oauth_tokens: 0,
+            oauth_oidc_client: None,
             oauth_server: None,
             tls_cert_dir: std::path::PathBuf::new(),
             tls_cert_path: String::new(),
@@ -6066,7 +6069,11 @@ impl AppState {
         self.oauth_has_password = srv.has_password();
         self.oauth_clients = srv.clients_count();
         self.oauth_tokens = srv.tokens_count();
+        self.oauth_oidc_client = srv.oidc_client_id();
         self.oauth_server = Some(srv);
+        if let Some(c) = &self.oauth_oidc_client {
+            self.log_debug(&format!("[oauth] Cloudflare Access (OIDC) configurado: client {}… — login pelo Cloudflare antes da senha do app.", c.chars().take(8).collect::<String>()));
+        }
         if self.oauth_enabled {
             self.log_debug(&format!(
                 "[oauth] OAuth 2.1 LIGADO na frente do /mcp: {} cliente(s) registrado(s), {} token(s) ativo(s), senha de autorizacao {}.",
@@ -6082,6 +6089,7 @@ impl AppState {
             self.oauth_has_password = srv.has_password();
             self.oauth_clients = srv.clients_count();
             self.oauth_tokens = srv.tokens_count();
+            self.oauth_oidc_client = srv.oidc_client_id();
         }
     }
 

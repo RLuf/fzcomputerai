@@ -66,6 +66,40 @@ pub struct State {
 pub struct OAuthServer {
     state: Mutex<State>,
     path: PathBuf,
+    /// Identidade delegada ao Cloudflare Access (OIDC) — `cloudflare-oidc.json`.
+    oidc: Mutex<Option<OidcConfig>>,
+    /// (authorization_endpoint, token_endpoint) descobertos pelo `.well-known`.
+    oidc_endpoints: Mutex<Option<(String, String)>>,
+    /// Autorizações em andamento (entre o redirect para o Cloudflare e a volta).
+    pending: Mutex<HashMap<String, Pending>>,
+}
+
+pub const OIDC_FILE: &str = "cloudflare-oidc.json";
+const PENDING_TTL_SECS: u64 = 600;
+
+/// `cloudflare-oidc.json` na pasta dos certificados:
+/// `{"client_id": "...", "client_secret": "..." | null, "discovery_url": "https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<id>/.well-known/openid-configuration", "callback_url": "https://<host>:<porta>/oauth/cf/callback"}`.
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct OidcConfig {
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    pub discovery_url: String,
+    /// Redirect URI registrada no Cloudflare. Se ausente, `<issuer>/oauth/cf/callback`.
+    #[serde(default)]
+    pub callback_url: Option<String>,
+}
+
+#[derive(Clone)]
+struct Pending {
+    client_id: String,
+    redirect_uri: String,
+    state: String,
+    code_challenge: String,
+    verifier: String,
+    callback_url: String,
+    email: Option<String>,
+    expires: u64,
 }
 
 /// Requisição HTTP já lida pelo proxy (cabeçalho + corpo).
@@ -232,7 +266,35 @@ impl OAuthServer {
     pub fn load(dir: &Path) -> Self {
         let path = dir.join(STATE_FILE);
         let state = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<State>(&s).ok()).unwrap_or_default();
-        OAuthServer { state: Mutex::new(state), path }
+        let oidc = std::fs::read_to_string(dir.join(OIDC_FILE)).ok().and_then(|s| serde_json::from_str::<OidcConfig>(&s).ok()).filter(|c| !c.client_id.is_empty() && !c.discovery_url.is_empty());
+        OAuthServer { state: Mutex::new(state), path, oidc: Mutex::new(oidc), oidc_endpoints: Mutex::new(None), pending: Mutex::new(HashMap::new()) }
+    }
+
+    /// Client ID do Cloudflare Access (OIDC) quando configurado.
+    pub fn oidc_client_id(&self) -> Option<String> {
+        self.oidc.lock().ok().and_then(|o| o.as_ref().map(|c| c.client_id.clone()))
+    }
+
+    /// Endpoints do Cloudflare (descoberta em cache). `None` = OIDC não configurado
+    /// ou descoberta falhou (aí o /authorize cai na senha, como antes).
+    fn oidc_endpoints(&self) -> Option<(OidcConfig, String, String)> {
+        let cfg = self.oidc.lock().ok()?.clone()?;
+        if let Ok(g) = self.oidc_endpoints.lock() {
+            if let Some((a, t)) = g.as_ref() {
+                return Some((cfg, a.clone(), t.clone()));
+            }
+        }
+        let (status, body) = crate::tls::https_get(&cfg.discovery_url).ok()?;
+        if status != 200 {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+        let a = v.get("authorization_endpoint")?.as_str()?.to_string();
+        let t = v.get("token_endpoint")?.as_str()?.to_string();
+        if let Ok(mut g) = self.oidc_endpoints.lock() {
+            *g = Some((a.clone(), t.clone()));
+        }
+        Some((cfg, a, t))
     }
 
     fn save(&self, st: &State) {
@@ -361,7 +423,8 @@ impl OAuthServer {
                 "service_documentation": "https://github.com/RLuf/fzcomputerai/blob/master/docs/https.md"
             }))),
             ("POST", "/register") => Some(self.register(req.body)),
-            ("GET", "/authorize") => Some(self.authorize_page(query, None)),
+            ("GET", "/authorize") => Some(self.authorize_start(query, issuer)),
+            ("GET", "/oauth/cf/callback") => Some(self.oidc_callback(query)),
             ("POST", "/authorize") => Some(self.authorize_submit(req.body)),
             ("POST", "/token") => Some(self.token(req.body)),
             (_, "/register") | (_, "/authorize") | (_, "/token") => Some(HttpResp::oauth_error(405, "invalid_request", "método não suportado")),
@@ -399,6 +462,109 @@ impl OAuthServer {
             "token_endpoint_auth_method": "none",
             "scope": SCOPE
         }))
+    }
+
+    /// GET /authorize: com Cloudflare Access configurado, valida o cliente e
+    /// manda o navegador logar no Cloudflare; senão, página de senha direta.
+    fn authorize_start(&self, query: &str, issuer: &str) -> HttpResp {
+        let Some((cfg, auth_ep, _)) = self.oidc_endpoints() else {
+            return self.authorize_page(query, None);
+        };
+        let q = parse_form(query);
+        let get = |k: &str| q.get(k).cloned().unwrap_or_default();
+        let (client_id, redirect_uri, state, challenge, method, response_type) = (get("client_id"), get("redirect_uri"), get("state"), get("code_challenge"), get("code_challenge_method"), get("response_type"));
+        let Some(client) = self.resolve_client(&client_id) else {
+            return HttpResp::html(400, page("Cliente desconhecido", "<p>Este <code>client_id</code> não está registrado (nem é um Client ID Metadata Document válido). O conector precisa registrar-se em <code>/register</code> primeiro.</p>".into()));
+        };
+        if !redirect_matches(&client.redirect_uris, &redirect_uri) {
+            return HttpResp::html(400, page("redirect_uri inválido", "<p>O <code>redirect_uri</code> não confere com o registrado pelo cliente.</p>".into()));
+        }
+        if response_type != "code" || method != "S256" || challenge.is_empty() {
+            return HttpResp::html(400, page("Requisição inválida", "<p>Exigido: <code>response_type=code</code> e PKCE <code>code_challenge_method=S256</code>.</p>".into()));
+        }
+        let sid = random_token();
+        let verifier = random_token();
+        let callback_url = cfg.callback_url.clone().filter(|c| !c.is_empty()).unwrap_or_else(|| format!("{issuer}/oauth/cf/callback"));
+        if let Ok(mut p) = self.pending.lock() {
+            let t = now();
+            p.retain(|_, v| v.expires > t);
+            p.insert(sid.clone(), Pending { client_id, redirect_uri, state, code_challenge: challenge, verifier: verifier.clone(), callback_url: callback_url.clone(), email: None, expires: t + PENDING_TTL_SECS });
+        }
+        let sep = if auth_ep.contains('?') { '&' } else { '?' };
+        let loc = format!(
+            "{auth_ep}{sep}response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+            url_encode(&cfg.client_id), url_encode(&callback_url), url_encode("openid email profile"), url_encode(&sid), b64url_sha256(&verifier)
+        );
+        HttpResp::redirect(loc)
+    }
+
+    /// GET /oauth/cf/callback?code&state=sid: troca o code no Cloudflare, lê o
+    /// e-mail do id_token e segue para a senha do app (ou emite o code direto).
+    fn oidc_callback(&self, query: &str) -> HttpResp {
+        let q = parse_form(query);
+        let get = |k: &str| q.get(k).cloned().unwrap_or_default();
+        if !get("error").is_empty() {
+            return HttpResp::html(400, page("Login recusado", format!("<p>O Cloudflare Access devolveu <code>{}</code>: {}</p>", html_escape(&get("error")), html_escape(&get("error_description")))));
+        }
+        let (code, sid) = (get("code"), get("state"));
+        let Some(pend) = self.pending.lock().ok().and_then(|p| p.get(&sid).cloned()).filter(|p| p.expires > now()) else {
+            return HttpResp::html(400, page("Sessão expirada", "<p>Esta autorização não existe mais (10 min). Volte ao cliente e conecte de novo.</p>".into()));
+        };
+        let Some((cfg, _, token_ep)) = self.oidc_endpoints() else {
+            return HttpResp::html(503, page("Cloudflare indisponível", "<p>Não foi possível ler a configuração OIDC do Cloudflare.</p>".into()));
+        };
+        let mut form = format!(
+            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+            url_encode(&code), url_encode(&pend.callback_url), url_encode(&cfg.client_id), url_encode(&pend.verifier)
+        );
+        if let Some(sec) = cfg.client_secret.as_ref().filter(|s| !s.is_empty()) {
+            form.push_str(&format!("&client_secret={}", url_encode(sec)));
+        }
+        let (status, body) = match crate::tls::https_post_form(&token_ep, &form) {
+            Ok(r) => r,
+            Err(e) => return HttpResp::html(502, page("Cloudflare não respondeu", format!("<p>Token endpoint: {}</p>", html_escape(&e.to_string())))),
+        };
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        if status != 200 {
+            return HttpResp::html(502, page("Cloudflare recusou o código", format!("<p>HTTP {status}: <code>{}</code></p>", html_escape(&body.chars().take(300).collect::<String>()))));
+        }
+        let id_token = v.get("id_token").and_then(|t| t.as_str()).unwrap_or("");
+        let email = jwt_claim(id_token, "email").unwrap_or_else(|| "(sem e-mail no id_token)".to_string());
+        if let Ok(mut p) = self.pending.lock() {
+            if let Some(x) = p.get_mut(&sid) {
+                x.email = Some(email.clone());
+            }
+        }
+        if !self.has_password() {
+            return self.finish_pending(&sid);
+        }
+        let body = format!(
+            "<p>Login no Cloudflare Access: <b>{}</b></p><p><b>{}</b> quer acessar o MCP desta máquina.</p>\
+             <form method=\"post\" action=\"/authorize\"><input type=\"hidden\" name=\"sid\" value=\"{}\">\
+             <label>Senha de autorização do FzComputerAI<br><input type=\"password\" name=\"password\" autofocus autocomplete=\"current-password\"></label><br><br>\
+             <button type=\"submit\">Autorizar</button></form>",
+            html_escape(&email),
+            html_escape(&self.resolve_client(&pend.client_id).map(|c| c.client_name).unwrap_or_default()),
+            html_escape(&sid)
+        );
+        HttpResp::html(200, page("Autorizar acesso ao MCP", body))
+    }
+
+    /// Emite o code do app para a autorização pendente e redireciona ao cliente.
+    fn finish_pending(&self, sid: &str) -> HttpResp {
+        let Some(pend) = self.pending.lock().ok().and_then(|mut p| p.remove(sid)).filter(|p| p.email.is_some()) else {
+            return HttpResp::html(400, page("Sessão expirada", "<p>Esta autorização não existe mais. Volte ao cliente e conecte de novo.</p>".into()));
+        };
+        let code = random_token();
+        if let Ok(mut st) = self.state.lock() {
+            Self::gc(&mut st);
+            st.codes.insert(code.clone(), AuthCode { client_id: pend.client_id, redirect_uri: pend.redirect_uri.clone(), code_challenge: pend.code_challenge, expires: now() + CODE_TTL_SECS });
+            self.save(&st);
+        }
+        let sep = if pend.redirect_uri.contains('?') { '&' } else { '?' };
+        let mut loc = format!("{}{sep}code={}", pend.redirect_uri, url_encode(&code));
+        if !pend.state.is_empty() { loc.push_str(&format!("&state={}", url_encode(&pend.state))); }
+        HttpResp::redirect(loc)
     }
 
     fn authorize_page(&self, query: &str, error: Option<&str>) -> HttpResp {
@@ -440,6 +606,21 @@ impl OAuthServer {
     fn authorize_submit(&self, body: &[u8]) -> HttpResp {
         let f = parse_form(&String::from_utf8_lossy(body));
         let get = |k: &str| f.get(k).cloned().unwrap_or_default();
+        let sid = get("sid");
+        if !sid.is_empty() {
+            // Volta do Cloudflare Access: só a senha do app falta.
+            let expected = self.state.lock().map(|s| s.password_sha256.clone()).unwrap_or_default();
+            if expected.is_empty() || sha256_hex(get("password").trim().as_bytes()) != expected {
+                std::thread::sleep(std::time::Duration::from_millis(800));
+                let body = format!(
+                    "<p class=\"err\">Senha incorreta.</p><form method=\"post\" action=\"/authorize\"><input type=\"hidden\" name=\"sid\" value=\"{}\">\
+                     <label>Senha de autorização do FzComputerAI<br><input type=\"password\" name=\"password\" autofocus></label><br><br><button type=\"submit\">Autorizar</button></form>",
+                    html_escape(&sid)
+                );
+                return HttpResp::html(200, page("Autorizar acesso ao MCP", body));
+            }
+            return self.finish_pending(&sid);
+        }
         let (client_id, redirect_uri, state, challenge, password) = (get("client_id"), get("redirect_uri"), get("state"), get("code_challenge"), get("password"));
         let ok_client = self.resolve_client(&client_id).map(|c| redirect_matches(&c.redirect_uris, &redirect_uri)).unwrap_or(false);
         if !ok_client || challenge.is_empty() {
@@ -519,6 +700,35 @@ impl OAuthServer {
     }
 }
 
+/// Lê uma claim de string do payload de um JWT (base64url, sem validar assinatura:
+/// o token veio direto do token endpoint do Cloudflare por TLS verificado).
+fn jwt_claim(jwt: &str, claim: &str) -> Option<String> {
+    let payload = jwt.split('.').nth(1)?;
+    let mut s = payload.replace('-', "+").replace('_', "/");
+    while s.len() % 4 != 0 { s.push('='); }
+    let bytes = b64_decode(&s)?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    v.get(claim)?.as_str().map(|x| x.to_string())
+}
+
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits = 0;
+    for c in s.bytes() {
+        if c == b'=' { break; }
+        let v = T.iter().position(|&t| t == c)? as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xff) as u8);
+        }
+    }
+    Some(out)
+}
+
 fn page(title: &str, body: String) -> String {
     format!("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{t} — FzComputerAI</title>\
 <style>body{{font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;margin:0;display:flex;justify-content:center;padding:40px 16px}}main{{max-width:520px;width:100%;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:28px}}h1{{font-size:20px;margin:0 0 16px}}code{{background:#0d1117;padding:2px 6px;border-radius:4px;word-break:break-all}}input[type=password]{{width:100%;padding:10px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#e6edf3;font-size:16px}}button{{background:#238636;color:#fff;border:0;padding:10px 18px;border-radius:6px;font-size:15px;cursor:pointer}}a{{color:#8b949e;margin-left:12px}}.err{{color:#f85149}}.foot{{color:#8b949e;font-size:12px;margin-top:20px}}</style></head>\
@@ -528,6 +738,14 @@ fn page(title: &str, body: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jwt_claim_reads_email() {
+        let payload = b64url_nopad(br#"{"email":"x@y.z","sub":"1"}"#.as_ref());
+        let jwt = format!("eyJhbGciOiJSUzI1NiJ9.{payload}.sig");
+        assert_eq!(jwt_claim(&jwt, "email").as_deref(), Some("x@y.z"));
+        assert!(jwt_claim("abc", "email").is_none());
+    }
 
     #[test]
     fn loopback_redirect_ignores_port() {

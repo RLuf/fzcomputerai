@@ -116,7 +116,7 @@ The server exposes a standardized set of MCP tools (*MCP Tools*) for multimodal 
 
 ---
 
-## 🖥️ Native GUI (Rust `fzcomputerai v2.3.2`)
+## 🖥️ Native GUI (Rust `fzcomputerai v2.3.3`)
 
 Native Rust GUI (`egui`/`eframe`, no Chromium or WebView), bilingual **PT-BR / English** with real-time language toggle. Organized into **7 tabs**:
 

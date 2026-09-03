@@ -232,6 +232,25 @@ Com auto-assinado, o cliente precisa aceitar o `.crt` (Node: `NODE_EXTRA_CA_CERT
 - **Backend criptográfico `ring`** em todas as crates; `aws-lc-rs` exigiria cmake+nasm no runner Windows do
   release.
 
+
+### Identidade pelo Cloudflare Access (OIDC)
+
+Para o login do OAuth ser feito pelo Cloudflare Access (GitHub, Google, One-time PIN…) em vez de só a senha do app:
+
+1. No Cloudflare Zero Trust, crie uma aplicação **Access for SaaS – OIDC** com redirect URI `https://<host>:<porta>/oauth/cf/callback`, PKCE ligado, scopes `openid email profile`, e as políticas de acesso desejadas.
+2. Crie `cloudflare-oidc.json` na pasta dos certificados (`%APPDATA%\FzComputerAI\tls`):
+   ```json
+   {
+     "client_id": "<Client ID da aplicação>",
+     "client_secret": "<Client Secret, ou null para cliente público com PKCE>",
+     "discovery_url": "https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<Client ID>/.well-known/openid-configuration",
+     "callback_url": "https://<host>:<porta>/oauth/cf/callback"
+   }
+   ```
+3. Reinicie o app (ou desligue/ligue o OAuth). O painel mostra `Cloudflare Access (OIDC): ATIVO`.
+
+Fluxo: cliente MCP → `/authorize` do app → login no Cloudflare → `/oauth/cf/callback` → senha do app (se definida) → código → `/token` do app. O `id_token` é obtido direto do token endpoint do Cloudflare por TLS verificado; o `email` aparece na página de autorização. Sem o arquivo, o `/authorize` volta a ser a página de senha.
+
 ## Solução de problemas
 
 | Sintoma | Causa provável | O que fazer |

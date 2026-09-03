@@ -7,6 +7,12 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [2.3.3] - 2026-09-03
+
+### Adicionado
+- **Cloudflare Access (OIDC) como identidade do OAuth** (`oauth.rs`): com `cloudflare-oidc.json` na pasta dos certificados (`client_id`, `client_secret` opcional, `discovery_url`, `callback_url`), o `GET /authorize` valida o cliente MCP e redireciona o navegador para o login do Cloudflare Access (authorization_code + PKCE S256, scopes `openid email profile`). O Cloudflare volta em `GET /oauth/cf/callback`; o app troca o `code` no token endpoint (cliente público ou confidencial), lê o `email` do `id_token`, pede a **senha do app** (se definida) e só então emite o código para o cliente MCP. Para o conector (Gemini/Claude/ChatGPT) nada muda: o servidor OAuth continua sendo o app. Sem o arquivo, ou se a descoberta falhar, o fluxo é o de antes (senha direta). Painel HTTPS mostra o estado; console loga `[oauth] Cloudflare Access (OIDC) configurado`.
+- `tls::https_post_form` (POST `x-www-form-urlencoded` pelo cliente HTTPS interno).
+
 ## [2.3.2] - 2026-09-03
 
 > Correção saída do teste com o **Claude Code conectado de verdade** (OAuth + 57 ferramentas) enquanto a tela do app dizia **"PARADO"**.
