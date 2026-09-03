@@ -14,6 +14,9 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 ### Corrigido
 - **Badge de status desatualizado**: o estado do motor/HTTPS só era reavaliado no startup e no botão *Testar Endpoint*. Motor iniciado (ou derrubado) fora da GUI — à mão, por outro cliente, por reinício — deixava o painel mentindo. Agora um **vigia em segundo plano** (`fz-status-watch`) faz um `initialize` leve em `127.0.0.1:<porta>` a cada 5 s, fora da thread da interface (nunca trava a UI), e só quando o resultado **muda** dispara a verificação completa (netstat + HTTPS) e registra no console `[vigia] motor … RESPONDEU/PAROU`. O badge passa a refletir a realidade em até ~5 s, sem clique.
 
+### Documentação
+- `docs/https.md` e `docs/solucao-de-problemas.md`: **cliente em outra máquina** (Claude Code via SSH/servidor). O redirect de loopback do OAuth cai no `localhost` do desktop e o cliente fica esperando; procedimento de colar a URL do callback no Claude Code (`complete_authentication`), medido em 2026-09-03 com Claude Code remoto → app na LAN via NAT na 8444. `docs/https.md` também passa a mostrar a configuração de cliente **sem** `headers` quando o OAuth está ligado.
+
 ## [2.3.1] - 2026-09-03
 
 > Correções do **teste com clientes reais** (Claude Code, Claude Desktop, ChatGPT/Codex) contra a referência de autenticação da Anthropic.

@@ -173,6 +173,30 @@ Compatibilidade: requisição com `Authorization: Bearer <token do motor>` conti
 
 Clientes nativos (Claude Code) usam **CIMD** — o `client_id` é a URL do documento de metadata deles — e redirect de **loopback com porta efêmera**; os dois são aceitos (v2.3.1). As preferências HTTPS ficam em `tls-config.json` na pasta dos certificados (o registro é só migração).
 
+### Cliente em outra máquina (Claude Code remoto, SSH, servidor sem navegador)
+
+O redirect do Claude Code é **loopback da máquina onde ele roda** (`http://localhost:<porta efêmera>/callback`).
+Se o Claude Code está num servidor (sessão SSH, VPS, container) e o navegador está no seu desktop, a página de
+`/authorize` autoriza normalmente, mas o redirect cai no `localhost` **do desktop**, onde não há nada escutando:
+o navegador mostra erro de conexão e o Claude Code fica esperando. Não é falha do app nem do OAuth — é a
+topologia.
+
+Procedimento (medido em 2026-09-03: Claude Code num servidor remoto → app na LAN de casa, via NAT na 8444):
+
+1. No Claude Code, deixe o fluxo gerar a URL de `/authorize` (a ferramenta `authenticate` do servidor MCP
+   imprime a URL quando não consegue abrir navegador).
+2. Abra essa URL no navegador do desktop, digite a senha de autorização e clique **Autorizar**.
+3. O navegador vai para `http://localhost:<porta>/callback?code=…&state=…` e mostra erro de conexão.
+   **Copie a URL inteira da barra de endereços.**
+4. Cole no Claude Code: ele chama `complete_authentication` com essa URL, troca o `code` no `/token` e as
+   ferramentas aparecem.
+
+O `code` expira rápido e o `state` pertence àquela sessão do Claude Code — faça os quatro passos de uma vez.
+Com `offline_access` o cliente guarda o refresh token; só é preciso repetir se voltar **401**.
+
+Sintoma de quem trava aqui: `/mcp` responde 401 (esperado), os dois metadata e o `/register` respondem, a tela
+de senha aparece, e mesmo assim o cliente "nunca conecta". Se for isso, é o callback.
+
 ## Configuração nos clientes
 
 ```json
@@ -185,6 +209,13 @@ Clientes nativos (Claude Code) usam **CIMD** — o `client_id` é a URL do docum
     }
   }
 }
+```
+
+Com **OAuth 2.1 ligado**, omita `headers`: o cliente recebe o 401, descobre o OAuth pelo `WWW-Authenticate`
+e faz o fluxo sozinho. No Claude Code:
+
+```bash
+claude mcp add --transport http fzcomputerai https://mcp.exemplo.com.br:8443/mcp
 ```
 
 Com auto-assinado, o cliente precisa aceitar o `.crt` (Node: `NODE_EXTRA_CA_CERTS=…\selfsigned.crt`; Python
