@@ -7,6 +7,17 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [2.3.5] - 2026-09-04
+
+> Correção saída de um caso real: **certificado Let's Encrypt válido por 87 dias no disco e o listener HTTPS parado assim mesmo**, com "Ligar HTTPS" marcado. O endpoint só voltou depois de fechar e reabrir o app.
+
+### Corrigido
+- **`start_tls()` falhava uma vez e nunca mais tentava.** O listener HTTPS só era (re)iniciado por evento: startup, *Aplicar / Reiniciar HTTPS*, emissão ACME bem-sucedida ou toggle do OAuth. Quando `tls_resolve_cert()` devolvia erro naquele instante — emissão Let's Encrypt que acabou de falhar, porta momentaneamente presa, certificado ainda não emitido — o app gravava `tls_status = Error` e **parava ali**. A preferência continuava "ligado", a porta continuava morta, e nada reavaliava: nem o vigia de status da 2.3.2 (que só reavalia o **motor**), nem a checagem de renovação (que só roda `if self.tls_proxy.is_some()`, ou seja, apenas quando o listener **já está de pé**). Resultado medido: `letsencrypt.crt` válido até 2026-12-01 cobrindo os dois SANs, `tlscfg:enabled=1`, `tlscfg:port=8444` — e `netstat` sem nada na 8444, das duas uma só voltando com restart da GUI.
+- Agora `poll_tls()` roda um **supervisor** (`tls_retry_if_down`): a cada 30 s, se era para o HTTPS estar ligado e o listener não está de pé, ele resolve o certificado e sobe de novo sozinho. "Ligado" volta a significar "de pé". Não age quando o listener está vivo, quando o usuário desligou o HTTPS, ou enquanto uma emissão ACME está em curso — e só loga/tenta quando o certificado do modo atual **realmente resolve**, para o console não virar carrossel de erro enquanto o Let's Encrypt não foi emitido.
+
+### Alterado
+- Versão 2.3.5 em `Cargo.toml`, `Cargo.lock` e `package.json`.
+
 ## [2.3.4] - 2026-09-04
 
 > Só documentação e convenções: o binário é o mesmo da 2.3.3. Fecha a revisão exigida pelas regras do projeto (README PT/EN, docs/, AGENTS.md) para o login pelo Cloudflare Access.

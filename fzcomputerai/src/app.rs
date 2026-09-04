@@ -359,6 +359,13 @@ pub struct AppState {
     tls_proxy: Option<crate::tls::TlsProxyHandle>,
     tls_acme_rx: Option<std::sync::mpsc::Receiver<crate::tls::AcmeEvent>>,
     tls_renew_check: Option<std::time::Instant>,
+    /// Última tentativa automática de subir o listener HTTPS (ver
+    /// `poll_tls`). Sem isto, um `start_tls()` que falha uma vez — certificado
+    /// ainda não emitido, porta momentaneamente presa, emissão ACME que
+    /// terminou em erro — deixava o HTTPS DESLIGADO até alguém reabrir o app,
+    /// mesmo com um certificado válido no disco. Medido: cert Let's Encrypt
+    /// válido por 87 dias em `letsencrypt.crt` e o listener parado assim mesmo.
+    tls_retry_check: Option<std::time::Instant>,
     /// Vigia de status: thread em segundo plano que sonda o motor (127.0.0.1:porta)
     /// a cada 5 s e avisa a GUI quando o resultado MUDA. Evita o badge "PARADO"
     /// ficar mentindo quando o motor foi (re)iniciado fora da GUI.
@@ -492,6 +499,7 @@ impl Default for AppState {
             tls_proxy: None,
             tls_acme_rx: None,
             tls_renew_check: None,
+            tls_retry_check: None,
             status_watch: None,
 
             tunnel_child: None,
@@ -6651,6 +6659,50 @@ impl AppState {
                 }
             }
         }
+
+        self.tls_retry_if_down();
+    }
+
+    /// Supervisor do listener HTTPS: "ligado" tem que significar "de pé".
+    ///
+    /// `start_tls()` só roda em evento (startup, Aplicar, emissão ACME que deu
+    /// certo, toggle do OAuth). Se a primeira tentativa falha, nada nunca mais
+    /// tenta — o app fica com "Ligar HTTPS" marcado e a porta morta até alguém
+    /// reabrir a GUI. Foi o que aconteceu de verdade: a emissão Let's Encrypt
+    /// falhou, `tls_resolve_cert()` devolveu erro naquele instante, e o listener
+    /// continuou parado *depois* de o certificado existir e ser válido.
+    ///
+    /// Aqui a intenção do usuário (`tls_enabled`) volta a valer sozinha: a cada
+    /// 30 s, se era para estar ligado e não está, tenta de novo. Não mexe em
+    /// nada quando o listener está vivo, quando o usuário desligou, ou enquanto
+    /// uma emissão ACME está em curso (senão brigaria com ela).
+    fn tls_retry_if_down(&mut self) {
+        if !self.tls_enabled || self.tls_proxy.is_some() || self.tls_acme_busy {
+            self.tls_retry_check = None;
+            return;
+        }
+        let due = match self.tls_retry_check {
+            None => true,
+            Some(t) => t.elapsed() > std::time::Duration::from_secs(30),
+        };
+        if !due {
+            return;
+        }
+        self.tls_retry_check = Some(std::time::Instant::now());
+        // Só vale a pena tentar se o certificado do modo atual resolve agora.
+        // Sem isto o console viraria um carrossel de erro a cada 30 s enquanto
+        // o Let's Encrypt não foi emitido.
+        let (crt, key) = match self.tls_resolve_cert() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        if !crt.exists() || !key.exists() {
+            return;
+        }
+        self.log_debug(
+            "[https] Listener marcado como ligado mas estava parado — certificado disponivel, subindo de novo.",
+        );
+        self.start_tls();
     }
 
     /// Primeiro nome do campo Domínio (aceita vários separados por vírgula).

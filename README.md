@@ -117,7 +117,7 @@ O servidor expõe um conjunto de ferramentas MCP (*MCP Tools*) padronizadas para
 
 ---
 
-## 🖥️ Interface Gráfica Nativa (GUI Rust `fzcomputerai v2.3.4`)
+## 🖥️ Interface Gráfica Nativa (GUI Rust `fzcomputerai v2.3.5`)
 
 GUI nativa em Rust (`egui`/`eframe`, sem Chromium ou WebView), bilíngue **PT-BR / English** com alternância em tempo real. Organizada em **7 abas**:
 

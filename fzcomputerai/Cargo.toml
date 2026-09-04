@@ -1,6 +1,6 @@
 [package]
 name = "fzcomputerai"
-version = "2.3.4"
+version = "2.3.5"
 edition = "2021"
 authors = ["Roger Luft (VeilWalker) <roger@webstorage.com.br>"]
 description = "Interface Gráfica Nativa em Rust para FzComputerAI & CUA Driver MCP"
