@@ -1297,6 +1297,15 @@ async fn acme_issue(req: &AcmeRequest, tx: &std::sync::mpsc::Sender<AcmeEvent>) 
 /// SISTEMA (rustls-platform-verifier), HTTP/1.1, sem dependência de cliente
 /// HTTP. Só para as chamadas curtas da API do Cloudflare e do DoH.
 fn https_request(method: &str, url: &str, bearer: Option<&str>, body: Option<&str>) -> Result<(u16, String)> {
+    https_request_ct(method, url, bearer, body, "application/json")
+}
+
+/// POST `application/x-www-form-urlencoded` (token endpoint OIDC do Cloudflare Access).
+pub fn https_post_form(url: &str, form: &str) -> Result<(u16, String)> {
+    https_request_ct("POST", url, None, Some(form), "application/x-www-form-urlencoded")
+}
+
+fn https_request_ct(method: &str, url: &str, bearer: Option<&str>, body: Option<&str>, content_type: &str) -> Result<(u16, String)> {
     use rustls_platform_verifier::ConfigVerifierExt;
     install_crypto_provider();
     let rest = url.strip_prefix("https://").ok_or_else(|| anyhow!("URL precisa ser https://"))?;
@@ -1326,7 +1335,7 @@ fn https_request(method: &str, url: &str, bearer: Option<&str>, body: Option<&st
         req.push_str(&format!("Authorization: Bearer {t}\r\n"));
     }
     if !body.is_empty() {
-        req.push_str(&format!("Content-Type: application/json\r\nContent-Length: {}\r\n", body.len()));
+        req.push_str(&format!("Content-Type: {content_type}\r\nContent-Length: {}\r\n", body.len()));
     }
     req.push_str("\r\n");
     req.push_str(body);

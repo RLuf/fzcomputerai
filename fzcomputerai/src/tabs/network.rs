@@ -374,6 +374,16 @@ fn render_https(ui: &mut Ui, state: &mut AppState) {
                         .color(TERM_GRAY),
                     );
                 });
+                ui.label(
+                    RichText::new(match (&state.oauth_oidc_client, state.language) {
+                        (Some(c), Language::PtBr) => format!("Cloudflare Access (OIDC): ATIVO — client {}…  (login pelo Cloudflare, depois a senha do app)", c.chars().take(10).collect::<String>()),
+                        (Some(c), Language::English) => format!("Cloudflare Access (OIDC): ON — client {}…  (Cloudflare login, then the app password)", c.chars().take(10).collect::<String>()),
+                        (None, Language::PtBr) => "Cloudflare Access (OIDC): nao configurado — crie cloudflare-oidc.json na pasta dos certificados (docs/https.md).".to_string(),
+                        (None, Language::English) => "Cloudflare Access (OIDC): not configured — create cloudflare-oidc.json in the certificate folder (docs/https.md).".to_string(),
+                    })
+                    .size(11.0)
+                    .color(if state.oauth_oidc_client.is_some() { TERM_GREEN } else { TERM_GRAY }),
+                );
                 if !state.oauth_password_shown.is_empty() {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(match state.language {
