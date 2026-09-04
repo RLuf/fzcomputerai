@@ -134,7 +134,7 @@ Painel na área rolável, acima do diagnóstico. Liga um listener TLS **dentro d
 encaminha para o motor em `127.0.0.1:<porta>` — mesma mecânica do Encaminhamento LAN (thread do processo,
 sem admin, cai ao fechar). Certificado auto-assinado gerado no setup/primeiro run, Let's Encrypt ou próprio.
 O badge só fica verde após handshake TLS + `POST initialize` reais; **Testar Endpoint** e o vigia automático (5 s) incluem o HTTPS. O
-bearer token continua obrigatório. Guia completo: [https.md](https.md).
+bearer token continua obrigatório. Com o OAuth ligado o painel mostra também a linha **Cloudflare Access (OIDC)**: `ATIVO — client …` (login pelo Cloudflare antes da senha do app) ou `não configurado`. Guia completo: [https.md](https.md).
 
 ## 4. Lendo o diagnóstico
 

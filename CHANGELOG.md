@@ -7,6 +7,22 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [2.3.4] - 2026-09-04
+
+> Só documentação e convenções: o binário é o mesmo da 2.3.3. Fecha a revisão exigida pelas regras do projeto (README PT/EN, docs/, AGENTS.md) para o login pelo Cloudflare Access.
+
+### Documentação
+- **README / README_EN**: linha "Login pelo Cloudflare Access" na tabela de recursos e na aba MCP & Rede.
+- **docs/https.md**: seção do Cloudflare Access ampliada com o que foi medido na v2.3.3 (302 do `/authorize` para o Cloudflare com PKCE e `state` próprios, `/oauth/cf/callback`, discovery), pré-requisitos e limites (callback alcançável pelo navegador, políticas do Access como lista de quem entra, senha do app como segundo fator, cliente remoto continua colando a URL do callback). O parágrafo sobre o cliente em outra máquina foi reescrito sem atribuir a causa a "topologia".
+- **docs/solucao-de-problemas.md**: sintomas "Sessão expirada", "Cloudflare recusou o código", "Cliente desconhecido" e "OIDC: não configurado".
+- **docs/faq.md**: "Posso entrar com GitHub/Google em vez da senha?" e a detecção `Trojan:Win32/Bearfoos.B!ml` (heurística `!ml` em instalador local sem assinatura, medida em 2026-09-03).
+- **docs/arquitetura.md, docs/desenvolvimento.md, docs/uso-mcp-rede.md, docs/README.md**: `cloudflare-oidc.json` na persistência, `oauth.rs` no mapa do código, linha do painel HTTPS e índice.
+- **AGENTS.md 1.3**: convenções do OIDC (arquivo e segredo, app como broker, `state`/PKCE próprios, quando o `id_token` pode ser lido sem validar assinatura, TTL das pendências, fallback para a senha).
+- **SIGNING.md**: registro do falso positivo do Defender no instalador compilado localmente e o que o resolve (assinar o GUI antes de empacotar, carimbo de tempo, submissão à Microsoft).
+
+### Alterado
+- Versão 2.3.4 em `Cargo.toml`, `Cargo.lock`, `package.json`, README e SKILL.md.
+
 ## [2.3.3] - 2026-09-03
 
 ### Adicionado

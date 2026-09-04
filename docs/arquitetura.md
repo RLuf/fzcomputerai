@@ -145,6 +145,7 @@ Não existe arquivo de configuração do FzComputerAI, e o *storage* do eframe n
 | `HKCU\Software\FzComputerAI` -> `portproxy:<ip>:<porta>` | porta de destino da regra; marca a regra como **propriedade deste app** | `apply_portproxy()` — **só no fallback `netsh`**; o encaminhamento normal é a thread do app e não persiste nada |
 | `HKCU\Software\FzComputerAI` -> `tunnel:<provedor>:<pid>` | `imagem\|CreationDate\|porta\|run_id\|modo` — identidade forte do processo do túnel | `register_tunnel()` |
 | `HKCU\Software\FzComputerAI` -> `tunnelcfg:*` | preferências da aba Túnel (provedor, **caminho** do token-file, URL pública, alvo SSH...) | botão **Salvar configuração** |
+| arquivo `%APPDATA%\FzComputerAI\tls\cloudflare-oidc.json` (v2.3.3) | `client_id`, `client_secret` (opcional), `discovery_url`, `callback_url` do Cloudflare Access (OIDC); lido ao carregar o servidor OAuth. Segredo só neste arquivo, nunca no registro/log | você, à mão; o app só lê |
 
 Regras de ouro da persistência, visíveis no código:
 

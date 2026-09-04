@@ -506,3 +506,13 @@ o caminho é submeter o arquivo como falso positivo ao fabricante do AV.
 [www.webstorage.com.br](https://www.webstorage.com.br)
 
 </div>
+
+---
+
+## 12. Registro de falsos positivos
+
+| Data | Arquivo | Detecção | Contexto | Resultado |
+| :--- | :--- | :--- | :--- | :--- |
+| 2026-09-03 | `fzcomputerai-setup-windows-x64.exe` compilado **localmente** (v2.3.3, `%TEMP%\fz-v233`) | `Trojan:Win32/Bearfoos.B!ml` (Defender, quarentena) | binário sem assinatura, gerado minutos antes, sem prevalência. `.iss` e workflow idênticos à v2.2.0; o payload ganhou listener TLS, ACME, chamadas HTTPS à API do Cloudflare/DoH e OAuth/OIDC | liberado manualmente pelo usuário; instalador da release v2.3.2 no GitHub também sem Authenticode |
+
+O sufixo `!ml` é classificação heurística por aprendizado de máquina. O caminho que resolve é o da seção 8: assinar o GUI **antes** de empacotar, assinar o instalador, carimbo de tempo, e submeter o arquivo em <https://www.microsoft.com/wdsi/filesubmission> como falso positivo (a reavaliação costuma sair em 1–2 dias).

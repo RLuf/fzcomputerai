@@ -66,7 +66,7 @@ git clone https://github.com/RLuf/fzcomputerai.git
 cd fzcomputerai
 cargo build --release --manifest-path fzcomputerai/Cargo.toml
 # Optional: build the graphical installer (requires Inno Setup / ISCC.exe)
-ISCC.exe /DAppVersion=2.3.3 installer\fzcomputerai.iss
+ISCC.exe /DAppVersion=2.3.4 installer\fzcomputerai.iss
 ```
 
 After installation, the MCP server listens on `http://0.0.0.0:8000/mcp` by

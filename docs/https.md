@@ -178,8 +178,8 @@ Clientes nativos (Claude Code) usam **CIMD** — o `client_id` é a URL do docum
 O redirect do Claude Code é **loopback da máquina onde ele roda** (`http://localhost:<porta efêmera>/callback`).
 Se o Claude Code está num servidor (sessão SSH, VPS, container) e o navegador está no seu desktop, a página de
 `/authorize` autoriza normalmente, mas o redirect cai no `localhost` **do desktop**, onde não há nada escutando:
-o navegador mostra erro de conexão e o Claude Code fica esperando. Não é falha do app nem do OAuth — é a
-topologia.
+o navegador mostra erro de conexão e o Claude Code fica esperando. O destino do redirect é decidido pelo cliente,
+não pelo app; o procedimento abaixo fecha o ciclo à mão, e vale igual com o login pelo Cloudflare Access.
 
 Procedimento (medido em 2026-09-03: Claude Code num servidor remoto → app na LAN de casa, via NAT na 8444):
 
@@ -251,6 +251,21 @@ Para o login do OAuth ser feito pelo Cloudflare Access (GitHub, Google, One-time
 
 Fluxo: cliente MCP → `/authorize` do app → login no Cloudflare → `/oauth/cf/callback` → senha do app (se definida) → código → `/token` do app. O `id_token` é obtido direto do token endpoint do Cloudflare por TLS verificado; o `email` aparece na página de autorização. Sem o arquivo, o `/authorize` volta a ser a página de senha.
 
+**Medido em 2026-09-03 (v2.3.3, app na LAN de casa, cliente Claude Code noutra rede via NAT na 8444):**
+
+- discovery do Cloudflare responde 200 com `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri` e `response_types_supported=["code"]`; ela não anuncia `code_challenge_methods_supported`, mas aceita PKCE S256;
+- `GET /authorize` com o client do Claude Code (CIMD, PKCE S256) responde **302** para `https://<team>.cloudflareaccess.com/cdn-cgi/access/sso/oidc/<id>/authorization` com `redirect_uri=<callback_url>`, `scope=openid email profile`, `state` e `code_challenge` gerados pelo app;
+- `GET /oauth/cf/callback` sem pendência responde 400 "Sessão expirada"; rota desconhecida continua caindo no 401 do OAuth;
+- console: `[oauth] Cloudflare Access (OIDC) configurado: client 14997654…`.
+
+**Pré-requisitos e limites:**
+
+- `callback_url` tem de ser **exatamente** a Redirect URL registrada na aplicação Access e tem de ser alcançável **pelo navegador** que faz o login (na LAN, o nome/porta do listener HTTPS; pela internet, o NAT ou túnel que já serve o `/mcp`).
+- Quem pode entrar é definido pelas **políticas do Access** (e-mails, grupos, IdP). O app não tem lista própria: ele registra o e-mail do `id_token` na página e no console e pede a **senha do app** como segundo fator (se você definiu uma).
+- `client_secret` só é necessário se a aplicação foi criada como cliente confidencial; com cliente público + PKCE o campo pode ser `null`.
+- Cliente em **outra máquina** (Claude Code remoto): o login passa a ser pelo Cloudflare, mas o redirect final continua sendo o loopback da máquina do cliente — o passo de colar a URL do callback (seção acima) permanece.
+- O `id_token` é lido sem validar assinatura porque chega **direto do token endpoint por TLS verificado**; o app nunca aceita `id_token` vindo do navegador.
+
 ## Solução de problemas
 
 | Sintoma | Causa provável | O que fazer |
@@ -265,6 +280,9 @@ Fluxo: cliente MCP → `/authorize` do app → login no Cloudflare → `/oauth/c
 | `[acme] FALHOU … escutar em 0.0.0.0:80` | outra coisa na porta 80 (IIS, Apache, Skype antigo) | libere a 80 durante a emissão |
 | `[acme] validação falhou — status Invalid` | DNS não aponta para cá ou porta 80 não chega | testar de fora: `curl http://<dominio>/.well-known/acme-challenge/x` deve dar **404 do app**, não timeout |
 | `[acme] … rateLimited` | limite do Let's Encrypt | esperar; testar com **Staging** |
+| ao voltar do Cloudflare: **"Sessão expirada"** | mais de 10 min entre `/authorize` e a volta, app reiniciado no meio, ou callback aberto duas vezes | volte ao cliente e conecte de novo |
+| **"Cloudflare recusou o código"** (HTTP 400/401 do token endpoint) | `client_secret` errado/ausente, `callback_url` diferente da Redirect URL registrada, código já usado | corrija `cloudflare-oidc.json` e a aplicação no Zero Trust; reinicie o app |
+| painel diz `Cloudflare Access (OIDC): não configurado` com o arquivo criado | JSON inválido, `client_id`/`discovery_url` vazios, pasta errada | arquivo em `%APPDATA%\FzComputerAI\tls\cloudflare-oidc.json`; valide o JSON; reinicie |
 | cert expirou e não renovou | app fechado no período, ou porta 80 fechada | abrir o app (renova no startup) / reabrir a 80 e **Emitir** |
 
 ## Segurança — o que este recurso NÃO faz
