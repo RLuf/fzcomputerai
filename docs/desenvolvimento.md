@@ -29,7 +29,7 @@ fzcomcontrol/
 │     ├─ app.rs               AppState + toda a lógica + o shell da UI e o tema
 │     ├─ tls.rs               HTTPS do endpoint: proxy TLS (rustls), auto-assinado (rcgen),
 │     │                       Let's Encrypt (instant-acme), inspeção x509, sonda; teste em cargo test tls::
-│     ├─ oauth.rs             OAuth 2.1 para conectores (metadata, DCR, authorize, token); teste em cargo test oauth::
+│     ├─ oauth.rs             OAuth 2.1 para conectores (metadata, DCR, authorize, token) e, v2.3.3, login pelo Cloudflare Access (OIDC: /oauth/cf/callback, cloudflare-oidc.json); teste em cargo test oauth::
 │     ├─ tray.rs              ícone na bandeja (Windows)
 │     └─ tabs/
 │        ├─ mod.rs

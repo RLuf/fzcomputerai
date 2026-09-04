@@ -21,6 +21,14 @@ Get-Content .\fzcomputerai-setup-windows-x64.exe.sha256
 
 Confira que os valores batem antes de executar. O contexto completo (por que não há assinatura, o que seria necessário, e o que o auto-upgrade confere) está em [`SIGNING.md`](../SIGNING.md).
 
+### O Defender apontou `Trojan:Win32/Bearfoos.B!ml` no instalador. É vírus?
+
+Não. Medido em 2026-09-03: a detecção caiu sobre um instalador **compilado localmente**, sem assinatura, minutos depois de gerado. O sufixo `!ml` indica classificação por aprendizado de máquina, não assinatura de malware conhecido: binário novo, sem reputação e sem Authenticode, que abre listener de rede (HTTPS), fala com a API do Cloudflare, grava chave `Run` e mata/agenda processos (o instalador faz isso desde a v2.0) pontua alto na heurística. O `.iss` e o workflow não mudaram entre v2.2.0 e v2.3.3; o que cresceu foi o payload (TLS, ACME, OAuth, OIDC). O que resolve de verdade é **assinar o `fzcomputerai.exe` antes de empacotar e depois o instalador**, com carimbo de tempo (`scripts/sign-release.ps1`), e submeter o arquivo como falso positivo em <https://www.microsoft.com/wdsi/filesubmission>. Confira sempre o SHA256 publicado no release antes de executar.
+
+### Posso entrar com GitHub/Google em vez da senha do app?
+
+Sim, desde a v2.3.3: com `cloudflare-oidc.json` na pasta dos certificados, o `/authorize` manda o navegador para o **Cloudflare Access** (OIDC), que aplica as suas políticas (e-mails, grupos, IdP). O app lê o e-mail do `id_token`, pede a senha de autorização como segundo fator e só então emite o código ao cliente MCP. Sem o arquivo, vale só a senha. Guia: [https.md](https.md#identidade-pelo-cloudflare-access-oidc).
+
 ### Posso usar sem internet?
 
 Sim, para o uso principal. O motor e o MCP em `127.0.0.1` funcionam offline: iniciar/parar, aplicar porta, testar endpoint, encaminhamento LAN, calibração, janelas, gravação e `doctor` são todos locais.
