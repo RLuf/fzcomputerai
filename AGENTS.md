@@ -11,7 +11,7 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - **Motor Principal:** `cua-driver` (escrito em Rust, localizado em `cua/libs/cua-driver/rust`).
 - **Interface Gráfica:** `fzcomputerai` (escrito em Rust com `egui 0.29.1` / `eframe 0.29.1`).
 - **Protocolo de Comunicação:** MCP via Stdio local e HTTP TCP/IP (`CUA_DRIVER_RS_MCP_HTTP_PORT=8000`), com *bearer token* obrigatório em `CUA_DRIVER_RS_MCP_HTTP_TOKEN` — gerado e persistido pela própria GUI (ver 1.1).
-- **HTTPS (v2.2.0):** terminação TLS **dentro da GUI** (`fzcomputerai/src/tls.rs`), listener em `<bind>:8443` encaminhando para `127.0.0.1:8000`. Certificado auto-assinado gerado no setup (`--tls-init`) ou no primeiro run; Let's Encrypt (HTTP-01) opcional; cert próprio opcional. Ver 1.2.
+- **HTTPS (v2.2.0):** terminação TLS **dentro da GUI** (`src/tls.rs`), listener em `<bind>:8443` encaminhando para `127.0.0.1:8000`. Certificado auto-assinado gerado no setup (`--tls-init`) ou no primeiro run; Let's Encrypt (HTTP-01) opcional; cert próprio opcional. Ver 1.2.
 - **Patrocinadores Oficiais:** Webstorage Tecnologia (`www.webstorage.com.br`) e Imóvel Site (`www.imovelsite.com.br`).
 
 ---
@@ -23,7 +23,7 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 - A GUI `fzcomputerai` utiliza `egui` e `eframe` de modo imediato (Immediate Mode GUI), sem dependências pesadas de Chromium, WebView ou Node.js runtime.
 - Não introduza dependências desnecessárias no `Cargo.toml`.
 
-### 1.1. Convenções obrigatórias da GUI (`fzcomputerai/src/app.rs`)
+### 1.1. Convenções obrigatórias da GUI (`src/app.rs`)
 - **Spawns de processos SEMPRE via `quiet_cmd(program)`** (helper em `app.rs`): no Windows ele aplica `creation_flags(0x08000000)` (`CREATE_NO_WINDOW`) para não piscar janelas de console. Nunca use `std::process::Command::new` diretamente fora do helper.
 - **Versão SEMPRE via `env!("CARGO_PKG_VERSION")`** (ou `concat!` com ela). Nunca hardcode o número de versão em strings da UI — a fonte da verdade é o `Cargo.toml`.
 - **Todo handler de ação loga no Console Debug**: use `run_logged()` (comando, exit code, stdout, stderr, erros de spawn) ou `log_debug()` para eventos. O painel do Console Debug fica na aba MCP & Rede (limite de 64KB, mantém o final do log) e também espelha o log do motor lançado pela GUI (linhas com prefixo `[motor]`). No botão "Ir ao fim", o **salto explícito tem precedência** sobre a detecção de posição do scroll: era exatamente esse o bug — o clique setava `console_follow = true` e a detecção, no mesmo frame, sobrescrevia o valor com a posição antiga.
@@ -62,7 +62,7 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
   porque o workflow de release (`INSTALLER_NAME` em `.github/workflows/build-release.yml`) e o
   `OutputBaseFilename` do `installer/fzcomputerai.iss` formam um contrato de nome fixo — a versão vem do tag do
   GitHub. Além disso, o fluxo de auto-upgrade da GUI (`check_for_updates`/`start_update_download` em
-  `fzcomputerai/src/app.rs`) baixa o instalador pelo nome fixo; renomear o asset quebra o upgrade de TODAS as
+  `src/app.rs`) baixa o instalador pelo nome fixo; renomear o asset quebra o upgrade de TODAS as
   versões já instaladas. Quem quiser versão no nome do instalador precisa mudar os três lados juntos.
 
 ### 2. Comunicação MCP & Ferramentas de Visão
@@ -76,7 +76,7 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
 ### 3. Preservação de Direitos & Atribuição
 - O motor `cua-driver` é parte do projeto open-source `trycua/cua`, de **Cua AI, Inc.**, sob licença **MIT** (`Copyright (c) 2025 Cua AI, Inc.`).
 - **Sempre preservar** a declaração de Copyright original, o texto integral da MIT do Cua, a citação formal (`@software{cua2025...}`) e o agradecimento no `README.md`, `README_EN.md`, `LICENSE.md` e `installer/LICENSE.txt`. A MIT **exige** que o aviso de copyright e a licença acompanhem cópias ou porções substanciais — nunca remova essas seções.
-- As contribuições deste repositório e a GUI `fzcomputerai` estão sob licença **MIT** (`Copyright (c) 2026 Roger Luft (VeilWalker) — Webstorage Tecnologia`). A licença foi alterada de CC BY 4.0 para MIT na v2.1.0, para casar com a do projeto Cua e remover fricção de adoção (a própria Creative Commons não recomenda CC-BY para software). Fonte da verdade: `LICENSE.md`; os campos `license` de `fzcomputerai/Cargo.toml` e `package.json` devem acompanhar.
+- As contribuições deste repositório e a GUI `fzcomputerai` estão sob licença **MIT** (`Copyright (c) 2026 Roger Luft (VeilWalker) — Webstorage Tecnologia`). A licença foi alterada de CC BY 4.0 para MIT na v2.1.0, para casar com a do projeto Cua e remover fricção de adoção (a própria Creative Commons não recomenda CC-BY para software). Fonte da verdade: `LICENSE.md`; os campos `license` de `Cargo.toml` e `package.json` devem acompanhar.
 
 ### 4. Assinatura de Código, SmartScreen e Segurança do Usuário Final (NORMATIVO)
 
@@ -170,7 +170,7 @@ Ao buscar no repositório, **sempre exclua esses diretórios** e prefira alvo ex
 
 ```bash
 # BOM: lista de arquivos explícita
-grep -rn "<termo>" README.md AGENTS.md CHANGELOG.md docs/ fzcomputerai/src/
+grep -rn "<termo>" README.md AGENTS.md CHANGELOG.md docs/ src/
 
 # BOM: com exclusões
 grep -rn "<termo>" . --exclude-dir=.claude --exclude-dir=.claude-code-history \
@@ -210,7 +210,7 @@ direto, quando souber exatamente o arquivo.
 
 ### Compilação da GUI Rust
 ```powershell
-cargo build --release --manifest-path fzcomputerai/Cargo.toml
+cargo build --release --manifest-path Cargo.toml
 ```
 
 ### Instalação e Teste

@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/RLuf/fzcomputerai/master/install.sh
 Quem compila do fonte gera o **mesmo instalador gráfico** do release (requer [Inno Setup](https://jrsoftware.org/isinfo.php) com `ISCC.exe` acessível):
 ```powershell
 # 1. Compilar a GUI
-cargo build --release --manifest-path fzcomputerai/Cargo.toml
+cargo build --release --manifest-path Cargo.toml
 
 # 2. Gerar o instalador (saída em dist\fzcomputerai-setup-windows-x64.exe)
 ISCC.exe /DAppVersion=<versao> installer\fzcomputerai.iss

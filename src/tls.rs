@@ -656,8 +656,38 @@ fn serve_without_upstream(mut tls: rustls::StreamOwned<rustls::ServerConnection,
     let path = parts.next().unwrap_or("/").to_string();
     let headers: Vec<(String, String)> = lines.filter_map(|l| l.split_once(':').map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))).collect();
     let body = buf[head_end + 4..head_end + 4 + content_length].to_vec();
-    let host = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).unwrap_or_else(|| "localhost".into());
-    let issuer = format!("https://{host}");
+    let host = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-forwarded-host"))
+        .or_else(|| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("host")))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| "localhost".into());
+    let proto = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-forwarded-proto"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| "https".into());
+    let issuer = format!("{proto}://{host}");
+
+    if method == "OPTIONS" {
+        let resp = crate::oauth::HttpResp {
+            status: 200,
+            content_type: "text/plain",
+            extra_headers: vec![
+                ("Access-Control-Allow-Origin".into(), "*".into()),
+                ("Access-Control-Allow-Methods".into(), "GET, POST, OPTIONS".into()),
+                ("Access-Control-Allow-Headers".into(), "Authorization, Content-Type, Mcp-Protocol-Version".into()),
+                ("Access-Control-Max-Age".into(), "86400".into()),
+            ],
+            body: Vec::new(),
+        };
+        tls.write_all(&resp.serialize())?;
+        let _ = tls.flush();
+        tls.conn.send_close_notify();
+        let _ = tls.conn.complete_io(&mut tls.sock);
+        return Ok(());
+    }
+
     let req = crate::oauth::HttpReq { method: &method, path: &path, headers: &headers, body: &body };
     let resp = match auth.oauth.handle(&req, &issuer) {
         Some(r) => r,
@@ -764,8 +794,35 @@ impl HttpRewriter {
             let body: Vec<u8> = self.buf[body_start..body_start + content_length].to_vec();
             self.buf.drain(..body_start + content_length);
 
-            let host = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("host")).map(|(_, v)| v.clone()).unwrap_or_else(|| "localhost".into());
-            let issuer = format!("https://{host}");
+            let host = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("x-forwarded-host"))
+                .or_else(|| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("host")))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "localhost".into());
+            let proto = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("x-forwarded-proto"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| "https".into());
+            let issuer = format!("{proto}://{host}");
+
+            if method == "OPTIONS" {
+                let resp = crate::oauth::HttpResp {
+                    status: 200,
+                    content_type: "text/plain",
+                    extra_headers: vec![
+                        ("Access-Control-Allow-Origin".into(), "*".into()),
+                        ("Access-Control-Allow-Methods".into(), "GET, POST, OPTIONS".into()),
+                        ("Access-Control-Allow-Headers".into(), "Authorization, Content-Type, Mcp-Protocol-Version".into()),
+                        ("Access-Control-Max-Age".into(), "86400".into()),
+                    ],
+                    body: Vec::new(),
+                };
+                let _ = write_tls_response(g, sock, &resp.serialize());
+                return true;
+            }
+
             let req = crate::oauth::HttpReq { method: &method, path: &path, headers: &headers, body: &body };
             if let Some(resp) = self.auth.oauth.handle(&req, &issuer) {
                 let _ = write_tls_response(g, sock, &resp.serialize());
@@ -775,11 +832,14 @@ impl HttpRewriter {
             let authz = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("authorization")).map(|(_, v)| v.clone());
             let mut out_headers: Vec<(String, String)> = Vec::with_capacity(headers.len());
             match authz.as_deref() {
-                None if method != "OPTIONS" => {
+                None => {
                     let resp = crate::oauth::HttpResp {
                         status: 401,
                         content_type: "application/json",
-                        extra_headers: vec![("WWW-Authenticate".into(), crate::oauth::OAuthServer::www_authenticate(&issuer))],
+                        extra_headers: vec![
+                            ("WWW-Authenticate".into(), crate::oauth::OAuthServer::www_authenticate(&issuer)),
+                            ("Access-Control-Allow-Origin".into(), "*".into()),
+                        ],
                         body: br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Authentication required (OAuth 2.1: see WWW-Authenticate)"}}"#.to_vec(),
                     };
                     let _ = write_tls_response(g, sock, &resp.serialize());

@@ -77,10 +77,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Tag ${GITHUB_REF_NAME} -> versao ${VERSION}"
           # Substitui apenas a PRIMEIRA ocorrencia (secao [package]) — perl e portavel nos 3 runners (GNU/BSD sed divergem)
-          perl -0777 -pi -e "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/m" fzcomputerai/Cargo.toml
+          perl -0777 -pi -e "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/m" Cargo.toml
           perl -0777 -pi -e "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" package.json
-          echo "--- fzcomputerai/Cargo.toml ---"
-          grep -n '^version = ' fzcomputerai/Cargo.toml
+          echo "--- Cargo.toml ---"
+          grep -n '^version = ' Cargo.toml
           echo "--- package.json ---"
           grep -n '"version":' package.json
           # Disponibiliza a versao (sem o 'v') para os steps seguintes (ISCC /DAppVersion=)
@@ -105,12 +105,12 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            fzcomputerai/target/
+            target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build fzcomputerai GUI (Release)
         run: |
-          cargo build --release --manifest-path fzcomputerai/Cargo.toml
+          cargo build --release --manifest-path Cargo.toml
 
       # ------------------------------------------------------------------
       # ASSINATURA DE CODIGO (Authenticode) — OPCIONAL E CONDICIONAL
@@ -191,7 +191,7 @@ jobs:
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = 'fzcomputerai/target/release/fzcomputerai.exe'
+          $exe = 'target/release/fzcomputerai.exe'
           # Rede de seguranca: o step "Validate Code-Signing Password" ja abortou
           # o job se a senha estivesse vazia, mas repetimos aqui para que uma
           # reordenacao futura de steps nao reintroduza o /p engolido.
@@ -231,7 +231,7 @@ jobs:
       #     endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
       #     trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
       #     certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
-      #     files-folder: fzcomputerai/target/release
+      #     files-folder: target/release
       #     files-folder-filter: exe
       #     file-digest: SHA256
       #     timestamp-rfc3161: http://timestamp.acs.microsoft.com
@@ -253,12 +253,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cp fzcomputerai/target/release/fzcomputerai.exe "${{ matrix.asset_name }}"
+          cp target/release/fzcomputerai.exe "${{ matrix.asset_name }}"
 
       - name: Rename Non-Windows Artifacts
         if: runner.os != 'Windows'
         run: |
-          cp fzcomputerai/target/release/fzcomputerai ${{ matrix.asset_name }}
+          cp target/release/fzcomputerai ${{ matrix.asset_name }}
 
       # ------------------------------------------------------------------
       # PACOTES LINUX: .deb (cargo-deb), .rpm (cargo-generate-rpm) e AppImage
@@ -266,7 +266,7 @@ jobs:
       # Os pacotes instalam apenas o binario da GUI (/usr/bin/fzcomputerai);
       # o motor cua-driver e instalado a parte pelo instalador oficial do Cua.
       # Metadados dos empacotadores: [package.metadata.deb] e
-      # [package.metadata.generate-rpm] em fzcomputerai/Cargo.toml.
+      # [package.metadata.generate-rpm] em Cargo.toml.
       # ------------------------------------------------------------------
       - name: Package Linux (.deb, .rpm, AppImage)
         if: runner.os == 'Linux'
@@ -282,12 +282,12 @@ jobs:
           # `cargo install` aborta com "binary already exists in destination"
           # — derrubando o job Linux inteiro só em runs COM cache quente.
           cargo install cargo-deb cargo-generate-rpm --locked --force
-          cargo deb --manifest-path fzcomputerai/Cargo.toml --no-build -o "fzcomputerai_${V}_amd64.deb"
+          cargo deb --manifest-path Cargo.toml --no-build -o "fzcomputerai_${V}_amd64.deb"
           ( cd fzcomputerai && cargo generate-rpm -o "../fzcomputerai-${V}-1.x86_64.rpm" )
 
           # AppImage — AppDir minimo (binario + .desktop + icone png).
           mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
-          cp fzcomputerai/target/release/fzcomputerai AppDir/usr/bin/fzcomputerai
+          cp target/release/fzcomputerai AppDir/usr/bin/fzcomputerai
           convert 'installer/fzcomputerai.ico[0]' -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/fzcomputerai.png
           cp AppDir/usr/share/icons/hicolor/256x256/apps/fzcomputerai.png AppDir/fzcomputerai.png
           {

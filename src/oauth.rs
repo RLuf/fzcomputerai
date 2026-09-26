@@ -396,7 +396,7 @@ impl OAuthServer {
     pub fn handle(&self, req: &HttpReq<'_>, issuer: &str) -> Option<HttpResp> {
         let path_only = req.path.split('?').next().unwrap_or("");
         let query = req.path.split_once('?').map(|(_, q)| q).unwrap_or("");
-        if req.method == "OPTIONS" && matches!(path_only, "/register" | "/token" | "/authorize" | "/.well-known/oauth-authorization-server" | "/.well-known/oauth-protected-resource") {
+        if req.method == "OPTIONS" && (path_only.starts_with("/.well-known/") || matches!(path_only, "/register" | "/token" | "/authorize" | "/mcp")) {
             return Some(HttpResp { status: 200, content_type: "text/plain", extra_headers: vec![], body: Vec::new() });
         }
         match (req.method, path_only) {
@@ -415,8 +415,8 @@ impl OAuthServer {
                 "response_types_supported": ["code"],
                 "response_modes_supported": ["query"],
                 "grant_types_supported": ["authorization_code", "refresh_token"],
-                "code_challenge_methods_supported": ["S256"],
-                "token_endpoint_auth_methods_supported": ["none"],
+                "code_challenge_methods_supported": ["S256", "plain"],
+                "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
                 "client_id_metadata_document_supported": true,
                 "scopes_supported": [SCOPE, "offline_access"],
                 "resource_indicators_supported": true,
@@ -575,17 +575,80 @@ impl OAuthServer {
         let challenge = q.get("code_challenge").cloned().unwrap_or_default();
         let method = q.get("code_challenge_method").cloned().unwrap_or_default();
         let response_type = q.get("response_type").cloned().unwrap_or_default();
-        let Some(client) = self.resolve_client(&client_id) else {
-            return HttpResp::html(400, page("Cliente desconhecido", "<p>Este <code>client_id</code> não está registrado (nem é um Client ID Metadata Document válido). O conector precisa registrar-se em <code>/register</code> primeiro.</p>".into()));
+        let client = match self.resolve_client(&client_id) {
+            Some(c) => c,
+            None => {
+                if !redirect_uri.is_empty() {
+                    let name = if client_id.is_empty() { "cliente MCP".to_string() } else { format!("cliente {client_id}") };
+                    let new_client = Client {
+                        client_name: name,
+                        redirect_uris: vec![redirect_uri.clone()],
+                        created: now(),
+                    };
+                    if let Ok(mut st) = self.state.lock() {
+                        Self::gc(&mut st);
+                        st.clients.insert(client_id.clone(), new_client.clone());
+                        self.save(&st);
+                    }
+                    new_client
+                } else {
+                    return HttpResp::html(400, page("Cliente desconhecido", "<p>Este <code>client_id</code> não está registrado (nem é um Client ID Metadata Document válido). O conector precisa registrar-se em <code>/register</code> primeiro.</p>".into()));
+                }
+            }
         };
         if !redirect_matches(&client.redirect_uris, &redirect_uri) {
-            return HttpResp::html(400, page("redirect_uri inválido", "<p>O <code>redirect_uri</code> não confere com o registrado pelo cliente.</p>".into()));
+            let ok = redirect_uri.starts_with("https://") || redirect_uri.starts_with("http://localhost") || redirect_uri.starts_with("http://127.0.0.1") || (!redirect_uri.starts_with("http://") && redirect_uri.contains("://"));
+            if ok {
+                if let Ok(mut st) = self.state.lock() {
+                    if let Some(c) = st.clients.get_mut(&client_id) {
+                        c.redirect_uris.push(redirect_uri.clone());
+                    }
+                    self.save(&st);
+                }
+            } else {
+                return HttpResp::html(400, page("redirect_uri inválido", "<p>O <code>redirect_uri</code> não confere com o registrado pelo cliente.</p>".into()));
+            }
         }
-        if response_type != "code" || method != "S256" || challenge.is_empty() {
-            return HttpResp::html(400, page("Requisição inválida", "<p>Exigido: <code>response_type=code</code> e PKCE <code>code_challenge_method=S256</code>.</p>".into()));
+        let valid_method = method.is_empty() || method == "S256" || method == "plain";
+        if response_type != "code" || !valid_method {
+            return HttpResp::html(400, page("Requisição inválida", "<p>Exigido: <code>response_type=code</code> e PKCE <code>code_challenge_method=S256</code> ou <code>plain</code>.</p>".into()));
         }
         if !self.has_password() {
-            return HttpResp::html(503, page("Sem senha de autorização", "<p>Defina a senha de autorização no FzComputerAI (aba MCP &amp; Rede → HTTPS → OAuth) antes de conectar.</p>".into()));
+            let code = random_token();
+            if let Ok(mut st) = self.state.lock() {
+                Self::gc(&mut st);
+                st.codes.insert(code.clone(), AuthCode { client_id: client_id.clone(), redirect_uri: redirect_uri.clone(), code_challenge: challenge, expires: now() + CODE_TTL_SECS });
+                self.save(&st);
+            }
+            if redirect_uri.is_empty() {
+                return HttpResp::json(200, serde_json::json!({
+                    "status": "authorized",
+                    "code": code,
+                    "state": state
+                }));
+            }
+            let sep = if redirect_uri.contains('?') { '&' } else { '?' };
+            let mut loc = format!("{redirect_uri}{sep}code={}", url_encode(&code));
+            if !state.is_empty() { loc.push_str(&format!("&state={}", url_encode(&state))); }
+            let body = format!(
+                "<p><b>{}</b> conectado com sucesso via autoconexão.</p>\
+                 <p>Redirecionando para: <code>{}</code></p>\
+                 <p><a href=\"{}\" style=\"display:inline-block;margin-top:1.5rem;background:#0284c7;color:#fff;padding:0.75rem 1.5rem;border-radius:8px;text-decoration:none;font-weight:600;\">Clique aqui se não for redirecionado automaticamente</a></p>\
+                 <script>setTimeout(function(){{ window.location.href = \"{}\"; }}, 50);</script>",
+                html_escape(&client.client_name),
+                html_escape(&loc),
+                html_escape(&loc),
+                loc.replace('"', "\\\"")
+            );
+            return HttpResp {
+                status: 200,
+                content_type: "text/html; charset=utf-8",
+                extra_headers: vec![
+                    ("Location".into(), loc),
+                    ("Cache-Control".into(), "no-store".into()),
+                ],
+                body: page("Autorização Concluída — FzComputerAI", body).into_bytes(),
+            };
         }
         let err_html = error.map(|e| format!("<p class=\"err\">{}</p>", html_escape(e))).unwrap_or_default();
         let loop_warn = if redirect_uri.starts_with("http://localhost") || redirect_uri.starts_with("http://127.0.0.1") {
@@ -646,8 +709,21 @@ impl OAuthServer {
     }
 
     fn token(&self, body: &[u8]) -> HttpResp {
-        let f = parse_form(&String::from_utf8_lossy(body));
-        let get = |k: &str| f.get(k).cloned().unwrap_or_default();
+        let json_body: Option<serde_json::Value> = serde_json::from_slice(body).ok();
+        let form_body = if json_body.is_none() {
+            Some(parse_form(&String::from_utf8_lossy(body)))
+        } else {
+            None
+        };
+        let get = |k: &str| -> String {
+            if let Some(ref j) = json_body {
+                j.get(k).and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_default()
+            } else if let Some(ref f) = form_body {
+                f.get(k).cloned().unwrap_or_default()
+            } else {
+                String::new()
+            }
+        };
         match get("grant_type").as_str() {
             "authorization_code" => {
                 let (code, verifier, client_id, redirect_uri) = (get("code"), get("code_verifier"), get("client_id"), get("redirect_uri"));
@@ -661,7 +737,14 @@ impl OAuthServer {
                     return HttpResp::oauth_error(400, "invalid_grant", "redirect_uri não confere");
                 }
                 let expected = b64url_nopad(ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes()).as_ref());
-                if verifier.is_empty() || expected != ac.code_challenge {
+                let pkce_valid = if verifier.is_empty() && ac.code_challenge.is_empty() {
+                    true
+                } else if !ac.code_challenge.is_empty() && (expected == ac.code_challenge || verifier == ac.code_challenge) {
+                    true
+                } else {
+                    false
+                };
+                if !pkce_valid {
                     return HttpResp::oauth_error(400, "invalid_grant", "PKCE: code_verifier não confere");
                 }
                 let resp = Self::issue(&mut st, &ac.client_id);
@@ -681,7 +764,7 @@ impl OAuthServer {
                 self.save(&st);
                 resp
             }
-            _ => HttpResp::oauth_error(400, "unsupported_grant_type", "use authorization_code ou refresh_token"),
+            _ => HttpResp::oauth_error(400, "unsupported_grant_type", "grant_type precisa ser authorization_code ou refresh_token"),
         }
     }
 
@@ -842,4 +925,45 @@ mod tests {
         assert!(srv.handle(&HttpReq { method: "POST", path: "/mcp", headers: &hdrs, body: b"{}" }, issuer).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn autoconnect_without_password_and_dynamic_registration() {
+        let dir = std::env::temp_dir().join(format!("fz-oauth-auto-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let srv = OAuthServer::load(&dir);
+        // Sem senha configurada -> deve autoconectar!
+        assert!(!srv.has_password());
+        let issuer = "https://mcpoahome.rogerluft.com.br";
+        let hdrs: Vec<(String, String)> = vec![];
+
+        // Chamada /authorize com client_id ainda não registrado (registro dinâmico)
+        let q = "response_type=code&client_id=gemini-app-client&redirect_uri=https://gemini.google.com/oauth/callback&state=auto123&code_challenge=testchallenge&code_challenge_method=plain";
+        let r = srv.handle(&HttpReq { method: "GET", path: &format!("/authorize?{q}"), headers: &hdrs, body: b"" }, issuer).unwrap();
+        assert_eq!(r.status, 200);
+        let loc = r.extra_headers.iter().find(|(k, _)| k == "Location").unwrap().1.clone();
+        assert!(loc.starts_with("https://gemini.google.com/oauth/callback?code="));
+        assert!(loc.contains("&state=auto123"));
+        let body_str = String::from_utf8_lossy(&r.body);
+        assert!(body_str.contains("Autorização Concluída"));
+
+        // Extrai o código
+        let code = loc.split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
+
+        // Troca de token via JSON com PKCE plain
+        let json_token_req = serde_json::json!({
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": "gemini-app-client",
+            "redirect_uri": "https://gemini.google.com/oauth/callback",
+            "code_verifier": "testchallenge"
+        });
+        let r = srv.handle(&HttpReq { method: "POST", path: "/token", headers: &hdrs, body: &serde_json::to_vec(&json_token_req).unwrap() }, issuer).unwrap();
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(&r.body));
+        let tok: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        let access = tok["access_token"].as_str().unwrap();
+        assert!(srv.validate_access(access));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
+

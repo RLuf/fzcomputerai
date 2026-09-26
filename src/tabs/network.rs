@@ -1,5 +1,5 @@
 use crate::app::{
-    status_dot, term_button, term_button_danger, AppState, Language, PortStatus, TlsBind,
+    status_dot, term_button, term_button_danger, AppState, Language, PortStatus, PyProxyStatus, TlsBind,
     TlsMode, TlsStatus, TERM_BG_PANEL, TERM_GRAY, TERM_GREEN, TERM_GREEN_BRIGHT, TERM_WHITE,
     ST_ERR, ST_OK, ST_WARN,
 };
@@ -23,18 +23,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     render_controls_row(ui, state);
     ui.add_space(10.0);
 
-    // Sem console na aba: o diagnostico recebe todo o espaco restante.
-    egui::ScrollArea::vertical()
-        .id_salt("network_diag_scroll")
-        .max_height(ui.available_height())
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // HTTPS entra na area rolavel: nao encolhe os controles fixos
-            // que ja funcionavam e fica logo acima do diagnostico.
-            render_https(ui, state);
-            ui.add_space(10.0);
-            render_diagnostics(ui, state);
-        });
+    render_https(ui, state);
+    ui.add_space(10.0);
+    render_diagnostics(ui, state);
 }
 
 // ─── HTTPS (terminacao TLS no proprio app, ver src/tls.rs) ───
@@ -648,6 +639,18 @@ fn render_daemon_controls(ui: &mut Ui, state: &mut AppState) {
                     state.check_port_status();
                 }
 
+                ui.add_space(16.0);
+                
+                let proxy_log_btn = term_button(match state.language {
+                    Language::PtBr => "Log do Proxy",
+                    Language::English => "Proxy Log",
+                })
+                .min_size(Vec2::new(100.0, 30.0));
+
+                if ui.add(proxy_log_btn).clicked() {
+                    state.open_py_proxy_log();
+                }
+
                 #[cfg(target_os = "windows")]
                 {
                     ui.add_space(16.0);
@@ -686,202 +689,65 @@ fn render_daemon_controls(ui: &mut Ui, state: &mut AppState) {
         });
 }
 
-// ─── Seção 2 (FIXA): configuração de porta/IP + encaminhamento, lado a lado ───
+// ─── Seção 2 (FIXA): configuração de porta/IP ───
 fn render_controls_row(ui: &mut Ui, state: &mut AppState) {
-    ui.columns(2, |cols| {
-        // Coluna 1: Configuração de Porta & Rede
-        Frame::none()
-            .fill(TERM_BG_PANEL)
-            .rounding(Rounding::same(2.0))
-            .inner_margin(Margin::same(12.0))
-            .show(&mut cols[0], |ui| {
-                ui.label(
-                    RichText::new(match state.language {
-                        Language::PtBr => "Configuração de Porta & Rede",
-                        Language::English => "Port & Network Configuration",
-                    })
-                    .size(14.0)
-                    .strong()
-                    .color(TERM_GREEN_BRIGHT),
-                );
+    Frame::none()
+        .fill(TERM_BG_PANEL)
+        .rounding(Rounding::same(2.0))
+        .inner_margin(Margin::same(12.0))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(match state.language {
+                    Language::PtBr => "Configuração de Porta & Rede",
+                    Language::English => "Port & Network Configuration",
+                })
+                .size(14.0)
+                .strong()
+                .color(TERM_GREEN_BRIGHT),
+            );
 
-                ui.add_space(6.0);
+            ui.add_space(6.0);
 
+            ui.horizontal_wrapped(|ui| {
                 ui.label(match state.language {
                     Language::PtBr => "Porta TCP HTTP (padrão 8000):",
                     Language::English => "HTTP TCP Port (default 8000):",
                 });
-                ui.add(egui::TextEdit::singleline(&mut state.http_port).min_size(Vec2::new(180.0, 24.0)));
+                ui.add(egui::TextEdit::singleline(&mut state.http_port).desired_width(80.0));
 
-                ui.add_space(4.0);
+                ui.add_space(16.0);
 
                 ui.label(match state.language {
-                    Language::PtBr => "Endereço IP da LAN (autodetectado, editável):",
-                    Language::English => "LAN IP Address (autodetected, editable):",
+                    Language::PtBr => "Endereço IP da LAN:",
+                    Language::English => "LAN IP Address:",
                 });
-                ui.add(egui::TextEdit::singleline(&mut state.lan_ip).min_size(Vec2::new(180.0, 24.0)));
-
-                ui.add_space(8.0);
-
-                // Lado a lado para nao inchar a area FIXA na vertical.
-                ui.horizontal_wrapped(|ui| {
-                    let apply_env_btn = term_button(match state.language {
-                        // NAO prometa "Bind 0.0.0.0": o motor oficial do Cua
-                        // escuta somente em 127.0.0.1 (endereco fixo no codigo
-                        // deles) e ignora qualquer variavel de bind. O botao
-                        // aplica a PORTA, que e o que de fato tem efeito.
-                        Language::PtBr => "Aplicar Porta",
-                        Language::English => "Apply Port",
-                    })
-                    .min_size(Vec2::new(170.0, 28.0));
-
-                    if ui.add(apply_env_btn).clicked() {
-                        state.apply_env_port();
-                    }
-
-                    let check_update_btn = term_button(match state.language {
-                        // O botão AGE: o que estiver desatualizado (GUI e/ou
-                        // motor) já começa a baixar/atualizar — ver
-                        // check_for_updates em app.rs.
-                        Language::PtBr => "Verificar e Atualizar",
-                        Language::English => "Check & Update",
-                    })
-                    .min_size(Vec2::new(150.0, 28.0));
-
-                    if ui.add(check_update_btn).clicked() {
-                        state.check_for_updates();
-                    }
-                });
+                ui.add(egui::TextEdit::singleline(&mut state.lan_ip).desired_width(120.0));
             });
 
-        // Coluna 2: Encaminhamento de Porta (LAN -> localhost)
-        Frame::none()
-            .fill(TERM_BG_PANEL)
-            .rounding(Rounding::same(2.0))
-            .inner_margin(Margin::same(12.0))
-            .show(&mut cols[1], |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        // "->" ASCII de proposito: a fonte proporcional padrao
-                        // do egui nao tem o glifo "→" (viraria caixa quebrada).
-                        RichText::new(match state.language {
-                            // Curto: dividia a linha com o badge de 3 estados.
-                            Language::PtBr => "Encaminhamento LAN",
-                            Language::English => "LAN Forwarding",
-                        })
-                        .size(14.0)
-                        .strong()
-                        .color(TERM_GREEN_BRIGHT),
-                    );
+            ui.add_space(8.0);
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Badge de TRES estados honestos:
-                        //   FUNCIONANDO = regra na config E listener de pe
-                        //                 no netstat (verificado, nao suposto);
-                        //   SEM EFEITO  = regra existe na config do netsh mas
-                        //                 o listener NAO subiu (IP Helper);
-                        //   SEM REGRA   = nada configurado para o par IP:porta.
-                        let (badge_txt, badge_color) = if state.portproxy_active
-                            && state.portproxy_effective
-                        {
-                            (
-                                match state.language {
-                                    Language::PtBr => "REGRA FUNCIONANDO",
-                                    Language::English => "RULE WORKING",
-                                },
-                                ST_OK,
-                            )
-                        } else if state.portproxy_active {
-                            (
-                                match state.language {
-                                    Language::PtBr => "REGRA SEM EFEITO",
-                                    Language::English => "RULE NOT EFFECTIVE",
-                                },
-                                ST_ERR,
-                            )
-                        } else {
-                            (
-                                match state.language {
-                                    Language::PtBr => "SEM REGRA",
-                                    Language::English => "NO RULE",
-                                },
-                                ST_WARN,
-                            )
-                        };
-                        ui.label(RichText::new(badge_txt).color(badge_color).strong().size(12.0));
-                        status_dot(ui, badge_color);
-                    });
-                });
+            ui.horizontal_wrapped(|ui| {
+                let apply_env_btn = term_button(match state.language {
+                    Language::PtBr => "Aplicar Porta",
+                    Language::English => "Apply Port",
+                })
+                .min_size(Vec2::new(170.0, 28.0));
 
-                ui.add_space(6.0);
-
-                // Mapeamento publicado: o que entra pelo IP da LAN e entregue
-                // ao listener local do CUA Driver.
-                let mapping = format!(
-                    "{}:{}  ->  127.0.0.1:{}",
-                    state.lan_ip.trim(),
-                    state.http_port.trim(),
-                    state.http_port.trim()
-                );
-                ui.code(&mapping);
-
-                ui.label(
-                    RichText::new(match state.language {
-                        Language::PtBr => "netsh interface portproxy (depende do serviço IP Helper). Pode pedir elevação (UAC).",
-                        Language::English => "netsh interface portproxy (depends on the IP Helper service). May request elevation (UAC).",
-                    })
-                    .size(11.0)
-                    .color(TERM_GRAY),
-                );
-
-                if state.portproxy_active && !state.portproxy_effective {
-                    ui.label(
-                        RichText::new(match state.language {
-                            Language::PtBr => "A regra está na config do netsh mas o listener NÃO está de pé (teste real falhou). Reinicie o serviço IP Helper (iphlpsvc) ou Remova e reaplique.",
-                            Language::English => "The rule is in the netsh config but the listener is NOT up (real test failed). Restart the IP Helper service (iphlpsvc) or Remove and re-apply.",
-                        })
-                        .size(11.0)
-                        .color(ST_ERR),
-                    );
+                if ui.add(apply_env_btn).clicked() {
+                    state.apply_env_port();
                 }
 
-                ui.add_space(8.0);
+                let check_update_btn = term_button(match state.language {
+                    Language::PtBr => "Verificar Atualizações",
+                    Language::English => "Check for Updates",
+                })
+                .min_size(Vec2::new(150.0, 28.0));
 
-                ui.horizontal_wrapped(|ui| {
-                    let apply_btn = term_button(match state.language {
-                        Language::PtBr => "Aplicar Regra",
-                        Language::English => "Apply Rule",
-                    })
-                    .min_size(Vec2::new(105.0, 28.0));
-
-                    if ui.add(apply_btn).clicked() {
-                        state.apply_portproxy();
-                    }
-
-                    let remove_btn = term_button_danger(match state.language {
-                        Language::PtBr => "Remover Regra",
-                        Language::English => "Remove Rule",
-                    })
-                    .min_size(Vec2::new(105.0, 28.0));
-
-                    if ui.add(remove_btn).clicked() {
-                        state.remove_portproxy();
-                    }
-
-                    let status_btn = term_button(match state.language {
-                        Language::PtBr => "Atualizar Status",
-                        Language::English => "Refresh Status",
-                    })
-                    .min_size(Vec2::new(105.0, 28.0));
-
-                    if ui.add(status_btn).clicked() {
-                        // check_port_status ja recalcula o badge do portproxy
-                        // (regra na config + listener no netstat) num lugar so.
-                        state.check_port_status();
-                    }
-                });
+                if ui.add(check_update_btn).clicked() {
+                    state.check_for_updates();
+                }
             });
-    });
+        });
 }
 
 // ─── Diagnóstico (ROLÁVEL): endpoint real, listeners e regras existentes ───

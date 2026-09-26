@@ -13,7 +13,7 @@ A GUI **não implementa automação nenhuma**. Toda ação da interface termina 
 
 Há uma terceira peça, e ela é do motor: o **pacote de skills**, um conjunto de symlinks para os diretórios dos agentes (Claude Code, Codex, Antigravity, Hermes). Sem esses links, o agente conecta no MCP e **não enxerga ferramenta nenhuma** — e quem acabou de instalar não tem como adivinhar que precisa clicar num botão na aba Doctor & Skills. Por isso, desde a v2.1.1, o `cua-driver skills install` roda **no fim da instalação**. É idempotente e, pelo próprio help do motor, *"Never overwrites existing user links"* — verificado apagando os links e vendo o setup recriar os quatro. O botão da aba Doctor & Skills continua existindo para reparo.
 
-Dependências declaradas em `fzcomputerai/Cargo.toml`: `eframe`, `egui`, `tokio`, `serde`, `serde_json`, `anyhow`, `open` (mais `winresource` como *build-dependency* apenas no Windows). **Não há cliente HTTP.** Requisições HTTP são escritas à mão sobre `std::net::TcpStream` (loopback, sem TLS) ou delegadas a `curl.exe` / PowerShell quando há TLS envolvido.
+Dependências declaradas em `Cargo.toml`: `eframe`, `egui`, `tokio`, `serde`, `serde_json`, `anyhow`, `open` (mais `winresource` como *build-dependency* apenas no Windows). **Não há cliente HTTP.** Requisições HTTP são escritas à mão sobre `std::net::TcpStream` (loopback, sem TLS) ou delegadas a `curl.exe` / PowerShell quando há TLS envolvido.
 
 ## 2. Transporte MCP
 
@@ -28,7 +28,7 @@ Detalhes que a GUI depende (verificados no motor instalado e no repositório ups
 
 - Sem a variável `CUA_DRIVER_RS_MCP_HTTP_PORT`, **o listener HTTP nem é criado**. Não existe porta padrão implícita — a GUI usa 8000 apenas como valor inicial do campo.
 - **O endereço de escuta não é configurável.** O motor oficial escuta somente em `127.0.0.1`; o endereço está fixo no código do Cua (`([127,0,0,1], port)`). A string `CUA_DRIVER_RS_MCP_HTTP_BIND` **não existe** no binário oficial instalado e a busca por ela no repositório `trycua/cua` retorna zero resultado.
-- Uma versão anterior desta documentação afirmava haver bind `0.0.0.0`. **Era falso e foi corrigido.** Se alguém quiser reintroduzir a ideia, o comentário em `apply_env_port()` (`fzcomputerai/src/app.rs`) explica por quê não: gravar aquela variável não publica nada, o motor a ignora. A GUI hoje até **remove** a variável se encontrar sobra dela em `HKCU\Environment`, para não confundir o diagnóstico.
+- Uma versão anterior desta documentação afirmava haver bind `0.0.0.0`. **Era falso e foi corrigido.** Se alguém quiser reintroduzir a ideia, o comentário em `apply_env_port()` (`src/app.rs`) explica por quê não: gravar aquela variável não publica nada, o motor a ignora. A GUI hoje até **remove** a variável se encontrar sobra dela em `HKCU\Environment`, para não confundir o diagnóstico.
 - **Autenticação depende da versão do motor.** O contrato abaixo foi **medido no binário `cua-driver` 0.17.0 em 2026-08-03** — antes disso esta documentação apenas repetia a si mesma, sem fonte primária. São **dois** níveis distintos, e confundi-los é a causa clássica de diagnóstico errado:
 
   1. **Sem `CUA_DRIVER_RS_MCP_HTTP_TOKEN` no ambiente do processo, o daemon nem sobe.** `cua-driver serve` sai com código 1 e imprime em `stderr`: `cua-driver serve error: CUA_DRIVER_RS_MCP_HTTP_TOKEN must be set to a host-generated bearer token when the HTTP endpoint is enabled`. O resultado não é "requisição recusada", é **porta muda**.
@@ -105,7 +105,7 @@ O `netsh portproxy` continua no código **apenas como fallback**, para quando o 
 Exemplo: o usuário clica em **Iniciar** na aba MCP & Rede.
 
 1. `tabs/network.rs` desenha o botão e, no `clicked()`, chama `state.start_daemon()`. A camada de UI **não** executa processo nenhum — ela só chama métodos de `AppState`.
-2. `AppState::start_daemon()` (`fzcomputerai/src/app.rs`) **primeiro testa o endpoint**. Se ele já responde, a função **não encosta no daemon**. Antes da v2.1.1 ela parava o motor e subia outro sem checar nada — e no Windows o socket de uma porta que já teve conexão fica retido em `TIME_WAIT` por minutos, então o `serve` novo não conseguia o bind: `MCP HTTP transport disabled — bind 127.0.0.1:8000 failed (os error 10048)`, ou seja, daemon zumbi (pipe vivo, porta muda). Na prática, clicar **Iniciar** quebrava o que estava funcionando. Para forçar troca de processo existe **Reiniciar**.
+2. `AppState::start_daemon()` (`src/app.rs`) **primeiro testa o endpoint**. Se ele já responde, a função **não encosta no daemon**. Antes da v2.1.1 ela parava o motor e subia outro sem checar nada — e no Windows o socket de uma porta que já teve conexão fica retido em `TIME_WAIT` por minutos, então o `serve` novo não conseguia o bind: `MCP HTTP transport disabled — bind 127.0.0.1:8000 failed (os error 10048)`, ou seja, daemon zumbi (pipe vivo, porta muda). Na prática, clicar **Iniciar** quebrava o que estava funcionando. Para forçar troca de processo existe **Reiniciar**.
 3. Não havendo endpoint de pé, a GUI lança `cua-driver serve` como **processo filho dela**, com `CUA_DRIVER_RS_MCP_HTTP_PORT` e `CUA_DRIVER_RS_MCP_HTTP_TOKEN` injetados no ambiente do filho, e com `stdout`+`stderr` redirecionados para `%TEMP%\fzcomputerai-update\cua-driver-serve.log`. O console segue esse arquivo como `tail -f`, prefixando as linhas com `[motor]` — é assim que a atividade de clientes MCP externos (conector do Claude, Antigravity, Cursor) aparece na tela. Enquanto quem subia o motor era a Scheduled Task, o processo nascia filho do **Agendador**, o `stdout` pertencia à task e esses logs simplesmente **sumiam**.
 4. `run_logged()` monta o comando com `quiet_cmd()` — que no Windows aplica `CREATE_NO_WINDOW`, para nenhuma janela preta piscar na tela — executa com `output()` e registra no log: a linha de comando, o `exit code`, o `stdout` e o `stderr`, sempre com o resultado real.
 5. `log_debug()` anexa a entrada em `AppState::debug_log`, um `String` limitado a 64 KB (o excesso é cortado pelo início, em fronteira de caractere).
@@ -118,7 +118,7 @@ A **limpeza ao fechar** deixou de ser um script: até a v2.1.0 o `on_exit` dispa
 
 ## 5. Onde vive o estado
 
-Tudo em `AppState` (`fzcomputerai/src/app.rs`), uma struct única passada como `&mut` para cada aba. Não há gerenciador de estado, canal, nem `Arc<Mutex<...>>` global. Blocos principais:
+Tudo em `AppState` (`src/app.rs`), uma struct única passada como `&mut` para cada aba. Não há gerenciador de estado, canal, nem `Arc<Mutex<...>>` global. Blocos principais:
 
 | Bloco | Campos representativos |
 | --- | --- |

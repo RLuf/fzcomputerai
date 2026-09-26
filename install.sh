@@ -95,7 +95,7 @@ SCRIPT_DIR=""
 MODE="remote"
 if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
     SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-    if [ -f "$SCRIPT_DIR/fzcomputerai/Cargo.toml" ]; then
+    if [ -f "$SCRIPT_DIR/Cargo.toml" ]; then
         MODE="local"
     fi
 fi
@@ -358,8 +358,8 @@ build_from_source() {
 
     if [ "$DRY_RUN" -eq 1 ]; then
         dry "git clone --depth 1 ${REPO_URL}.git <tmpdir>/src"
-        dry "cargo build --release --manifest-path <tmpdir>/src/fzcomputerai/Cargo.toml"
-        dry "install -m 0755 <tmpdir>/src/fzcomputerai/target/release/fzcomputerai $INSTALL_DIR/fzcomputerai"
+        dry "cargo build --release --manifest-path <tmpdir>/src/Cargo.toml"
+        dry "install -m 0755 <tmpdir>/src/target/release/fzcomputerai $INSTALL_DIR/fzcomputerai"
         dry "(opcional) cargo build --release --package cua-driver --manifest-path <tmpdir>/src/cua/libs/cua-driver/rust/Cargo.toml"
         return 0
     fi
@@ -369,8 +369,8 @@ build_from_source() {
     git clone --depth 1 "${REPO_URL}.git" "$TMP_SRC_DIR/src"
 
     info "Compilando a GUI FzComputerAI (cargo build --release)..."
-    cargo build --release --manifest-path "$TMP_SRC_DIR/src/fzcomputerai/Cargo.toml"
-    local gui_bin="$TMP_SRC_DIR/src/fzcomputerai/target/release/fzcomputerai"
+    cargo build --release --manifest-path "$TMP_SRC_DIR/src/Cargo.toml"
+    local gui_bin="$TMP_SRC_DIR/src/target/release/fzcomputerai"
     if [ ! -f "$gui_bin" ]; then
         err "Compilação concluída, mas o binário não foi encontrado em $gui_bin."
         exit 1
@@ -518,11 +518,11 @@ EOF
 local_install() {
     local bin_path=""
 
-    # Compilar a GUI Rust (fzcomputerai/Cargo.toml existe — é o gatilho do modo local)
+    # Compilar a GUI Rust (Cargo.toml existe — é o gatilho do modo local)
     if [ "$HAS_CARGO" -eq 1 ]; then
         check_linux_build_deps
         info "Compilando a interface gráfica FzComputerAI (GUI Rust)..."
-        run cargo build --release --manifest-path "$SCRIPT_DIR/fzcomputerai/Cargo.toml" \
+        run cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml" \
             || warn "Falha ao compilar GUI Rust."
     else
         warn "Rust/Cargo não encontrado; a GUI não será compilada. Instale via https://rustup.rs"

@@ -7,12 +7,12 @@ Para quem vai compilar, alterar ou empacotar o FzComputerAI.
 Requisito: toolchain Rust estável. No Linux, as dependências de GUI do `eframe` (X11/Wayland, GL) precisam estar instaladas — o workflow de release faz isso no runner Ubuntu.
 
 ```bash
-cargo build --release --manifest-path fzcomputerai/Cargo.toml
+cargo build --release --manifest-path Cargo.toml
 ```
 
-O binário sai em `fzcomputerai/target/release/fzcomputerai` (`.exe` no Windows).
+O binário sai em `target/release/fzcomputerai` (`.exe` no Windows).
 
-Durante o desenvolvimento, `cargo run --manifest-path fzcomputerai/Cargo.toml` funciona, mas note que `main.rs` tem `#![windows_subsystem = "windows"]`: no Windows não há console anexado, e **toda** saída de diagnóstico vai para o console interno do app, não para o terminal.
+Durante o desenvolvimento, `cargo run --manifest-path Cargo.toml` funciona, mas note que `main.rs` tem `#![windows_subsystem = "windows"]`: no Windows não há console anexado, e **toda** saída de diagnóstico vai para o console interno do app, não para o terminal.
 
 No Windows, `build.rs` embute o recurso `VERSIONINFO` no `.exe` usando `winresource` (declarado como *build-dependency* apenas para host Windows). Sem isso, a aba Propriedades do arquivo sai em branco. Em Linux/macOS o `build.rs` é no-op.
 
@@ -96,7 +96,7 @@ Há dois ícones distintos, gerados juntos:
 | Saída | Uso |
 | --- | --- |
 | `installer/fzcomputerai.ico` | ícone do `.exe` (aplicado pelo `build.rs` como recurso Win32) e do instalador — é o que o Explorer, a busca e o atalho mostram |
-| `fzcomputerai/assets/icon64.rgba` | RGBA **cru** 64x64 embutido por `include_bytes!` — é o ícone da **janela** e da barra de tarefas enquanto o app roda |
+| `assets/icon64.rgba` | RGBA **cru** 64x64 embutido por `include_bytes!` — é o ícone da **janela** e da barra de tarefas enquanto o app roda |
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\make-icon.ps1
@@ -138,7 +138,7 @@ Para conferir o resultado numa máquina, `installer/verify-install.ps1` fica ins
 `.github/workflows/build-release.yml`, em resumo:
 
 1. **estampa a versão** do tag no `Cargo.toml` e no `package.json` (por isso a versão em código vem sempre de `env!("CARGO_PKG_VERSION")`);
-2. compila `cargo build --release --manifest-path fzcomputerai/Cargo.toml` nas três plataformas;
+2. compila `cargo build --release --manifest-path Cargo.toml` nas três plataformas;
 3. no Windows, **assina** o executável e o instalador com `signtool` **se** houver certificado configurado em segredo; sem certificado, o job emite um aviso explícito de que os binários **não** estão assinados — e é essa a situação dos artefatos publicados hoje (ver [`SIGNING.md`](../SIGNING.md));
 4. localiza/instala o `ISCC` e gera o instalador com `/DAppVersion` e `/DSourceExe`, falhando se o `.exe` esperado não aparecer;
 5. gera um `.sha256` **por artefato**, com o caminho gravado sem diretório, para que `sha256sum -c` funcione para quem baixa o instalador e o `.sha256` soltos na mesma pasta;
@@ -148,7 +148,7 @@ O `.sha256` não é enfeite: é exatamente o que o auto-upgrade da GUI confere a
 
 ## 7. Checklist antes do PR
 
-- [ ] compila com `cargo build --release --manifest-path fzcomputerai/Cargo.toml` sem warning novo;
+- [ ] compila com `cargo build --release --manifest-path Cargo.toml` sem warning novo;
 - [ ] nenhuma dependência nova em `Cargo.toml`;
 - [ ] nenhum `Command::new` fora de `quiet_cmd`;
 - [ ] todo caminho novo escreve algo no console (`run_logged` ou `log_debug`);

@@ -78,9 +78,9 @@
 ; Parametros de linha de comando (com defaults)
 ; ---------------------------------------------------------------------------
 #ifndef AppVersion
-  ; Fallback: mantido em sincronia manual com fzcomputerai/Cargo.toml.
+  ; Fallback: mantido em sincronia manual com Cargo.toml.
   ; No CI a versao vem do tag via /DAppVersion=x.y.z.
-  #define AppVersion "2.0.0"
+  #define AppVersion "2.4.1"
 #endif
 
 #ifndef SourceExe
@@ -319,7 +319,7 @@ OutputDir=..\dist
 ; .github/workflows/build-release.yml (o step "Build Windows Installer" falha
 ; se dist\fzcomputerai-setup-windows-x64.exe nao existir apos o ISCC) E com o
 ; nome do asset que a propria GUI baixa no auto-upgrade (check_for_updates /
-; start_update_download em fzcomputerai/src/app.rs procuram exatamente
+; start_update_download em src/app.rs procuram exatamente
 ; "fzcomputerai-setup-windows-x64.exe" na release do GitHub).
 ; NAO coloque versao no nome: renomear quebra a atualizacao automatica de
 ; TODAS as versoes ja instaladas na base. A versao do release vem do tag.
@@ -519,7 +519,7 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#ExeName}"; Components: ma
 ; mais. O modulo _install-common.psm1 e importado pelo install.ps1 por caminho
 ; relativo ao proprio script, entao ele precisa ficar no MESMO diretorio.
 ; Se algum dia o layout mudar, mude junto o caminho lido pela GUI em
-; fzcomputerai/src/app.rs - os dois lados formam um contrato so.
+; src/app.rs - os dois lados formam um contrato so.
 ;
 ; POR QUE "Components: main" E NAO "engine": estes dois arquivos sao o caminho
 ; que a GUI usa para instalar o motor DEPOIS, a qualquer momento. Amarra-los ao
@@ -529,6 +529,9 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#ExeName}"; Components: ma
 ; ========================================================================
 Source: "{#CuaScriptsDir}\install.ps1";          DestDir: "{app}\cua-driver"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#CuaScriptsDir}\_install-common.psm1"; DestDir: "{app}\cua-driver"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+
+; --- Proxy OAuth 2.1 e LAN -------------------------------------------------
+Source: "..\mcp-oauth-proxy\server.py"; DestDir: "{app}\mcp-oauth-proxy"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
 
 ; --- Componente "docs" -----------------------------------------------------
 ; Licenca e relatorio de verificacao pos-instalacao (testes reais: POST
@@ -561,7 +564,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#ExeName}"; WorkingDir: "{ap
 
 [Registry]
 ; Autostart. O nome do valor e o formato do dado (caminho ENTRE ASPAS) sao
-; IDENTICOS aos que a GUI grava em fzcomputerai/src/app.rs (set_autostart ->
+; IDENTICOS aos que a GUI grava em src/app.rs (set_autostart ->
 ; reg add HKCU\...\Run /v FzComputerAI /t REG_SZ /d "\"<exe>\"").
 ; Se mudar aqui, o checkbox "Iniciar com o Windows" da GUI dessincroniza.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "FzComputerAI"; ValueData: """{app}\{#ExeName}"""; Flags: uninsdeletevalue; Tasks: autostart
@@ -611,7 +614,7 @@ Root: HKCU; Subkey: "Environment"; ValueType: string; ValueName: "CUA_DRIVER_RS_
 ; Antes havia duas entradas [Run] com "postinstall skipifsilent" para instalar
 ; o motor. Isso tinha um defeito grave e silencioso: o auto-upgrade da GUI
 ; executa este setup com /VERYSILENT (ver install_update_and_restart em
-; fzcomputerai/src/app.rs), e "skipifsilent" fazia o motor NUNCA ser instalado
+; src/app.rs), e "skipifsilent" fazia o motor NUNCA ser instalado
 ; nem atualizado nesse caminho - ou seja, no caminho que a maior parte da base
 ; instalada realmente usa.
 ; Agora a instalacao do motor acontece em InstallEngineStep (secao [Code],
@@ -1826,7 +1829,7 @@ end;
 //
 // Remove o valor de autostart na desinstalacao SEMPRE que ele apontar para
 // dentro de {app} - inclusive quando foi a GUI que o criou (set_autostart em
-// fzcomputerai/src/app.rs), e nao a task do instalador.
+// src/app.rs), e nao a task do instalador.
 //
 // Por que nao basta o flag "uninsdeletevalue" da secao [Registry]: aquele
 // flag so e registrado quando a entrada e efetivamente processada, ou seja,

@@ -90,7 +90,7 @@ Conforme solicitado pelos autores do Cua:
 
 A GUI usa `egui`/`eframe` (licenciados sob MIT OR Apache-2.0) e outras crates
 do ecossistema Rust, cada uma sob a sua própria licença. Os termos de cada
-dependência ficam disponíveis em `fzcomputerai/Cargo.toml` e no registro
+dependência ficam disponíveis em `Cargo.toml` e no registro
 crates.io correspondente.
 
 ### Ferramentas de túnel (opcionais, baixadas sob demanda)

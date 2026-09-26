@@ -4,9 +4,10 @@ description: >-
   Use when you need to visually interact with a Windows desktop — see the screen,
   move the mouse, click, type, drag, manage windows, take screenshots, automate
   user flows, or perform end-to-end QA. FzComputerAI wraps the CUA Driver
-  (Computer Use Agent) with an MCP server accessible via HTTP JSON-RPC on any
-  interface (0.0.0.0:8000 by default), enabling remote agents on Linux, macOS,
-  or other machines to control a Windows desktop over the network.
+  (Computer Use Agent) with an MCP server accessible via HTTP JSON-RPC on loopback
+  (127.0.0.1:8000 with bearer token by default) and HTTPS/OAuth 2.1 via built-in
+  TLS listener or Cloudflare Tunnel, enabling remote agents on Linux, macOS,
+  or cloud platforms to control a Windows desktop over the network.
   Install: npm install -g fzcomputerai or the graphical Windows installer
   (fzcomputerai-setup-windows-x64.exe) from GitHub Releases.
 ---
@@ -15,29 +16,28 @@ description: >-
 
 FzComputerAI gives AI agents **eyes and hands on a real Windows desktop**: see
 the screen, move the mouse, click, type, drag, scroll, and manage windows —
-like a human at the keyboard. Accessible from **any machine on the network**
-via MCP over HTTP.
+like a human at the keyboard. Accessible locally and remotely via MCP over HTTP/HTTPS.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Remote Agent (Linux, macOS, Windows, Cloud)             │
-│  POST http://<windows-ip>:8000/mcp                       │
+│  Remote Agent (Linux, macOS, Gemini Apps, Claude, Cloud) │
+│  POST https://<domain>/mcp (OAuth 2.1 / Bearer)          │
 │  {"jsonrpc":"2.0","method":"tools/call",...}              │
 └──────────────────────────┬───────────────────────────────┘
-                           │ HTTP JSON-RPC
+                           │ HTTPS (Cloudflare Tunnel / TLS)
                            ▼
 ┌──────────────────────────────────────────────────────────┐
 │  FzComputerAI (Windows)                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ GUI (egui)   │  │ MCP HTTP     │  │ MCP Stdio     │  │
-│  │ Port config  │  │ 0.0.0.0:8000 │  │ cua-driver mcp│  │
-│  │ Daemon ctrl  │  │ JSON-RPC     │  │ pipe           │  │
+│  │ GUI (egui)   │  │ TLS / OAuth  │  │ MCP Stdio     │  │
+│  │ Port config  │  │ Proxy        │  │ cua-driver mcp│  │
+│  │ Daemon ctrl  │  │ 8443 / 8444  │  │ pipe           │  │
 │  └──────────────┘  └──────┬───────┘  └───────┬───────┘  │
-│                           │                   │          │
+│                           │ Bearer swap (local loopback) │
 │                    ┌──────▼───────────────────▼──────┐   │
-│                    │       CUA Driver (Rust)         │   │
+│                    │  CUA Driver: 127.0.0.1:8000     │   │
 │                    │  Computer Vision & UI Automation │   │
 │                    │  Win32 + UIA + Screenshots       │   │
 │                    └─────────────────────────────────┘   │
@@ -64,14 +64,15 @@ machine; needs internet). Unsigned binaries trigger SmartScreen: use
 ```powershell
 git clone https://github.com/RLuf/fzcomputerai.git
 cd fzcomputerai
-cargo build --release --manifest-path fzcomputerai/Cargo.toml
+cargo build --release --manifest-path Cargo.toml
 # Optional: build the graphical installer (requires Inno Setup / ISCC.exe)
-ISCC.exe /DAppVersion=2.3.5 installer\fzcomputerai.iss
+ISCC.exe /DAppVersion=2.3.6 installer\fzcomputerai.iss
 ```
 
-After installation, the MCP server listens on `http://0.0.0.0:8000/mcp` by
-default. Use the GUI (`fzcomputerai.exe`) to start/stop the daemon, configure
-the port, and test tools.
+After installation, the MCP engine listens on `http://127.0.0.1:8000/mcp`
+with Bearer token authentication (`CUA_DRIVER_RS_MCP_HTTP_TOKEN`). Remote
+connections are served via the built-in TLS/OAuth 2.1 listener (port 8443/8444)
+or Cloudflare Tunnel. Use the GUI (`fzcomputerai.exe`) to manage services.
 
 ## Workflow: Look → Act → Verify
 
@@ -300,13 +301,15 @@ Not quoted from docs; run against the installed `cua-driver` 0.17.0:
 
 > **The listen address is NOT configurable.** The official engine binds **only to
 > `127.0.0.1`** — the address is hardcoded in Cua's `mcp_http.rs`
-> (`([127,0,0,1], port)`), and no bind variable exists upstream. A previous
-> version of this document listed a `CUA_DRIVER_RS_MCP_HTTP_BIND` variable
-> defaulting to `0.0.0.0`; **that was wrong** and has been removed (verified
-> twice: the string does not exist in the installed official binary, and
-> searching the `trycua/cua` repository for it returns zero hits).
-> For LAN access use `netsh portproxy` (MCP & Network tab); for internet access
-> use an outbound tunnel (Tunnel tab).
+> (`([127,0,0,1], port)`), and no bind variable exists upstream.
+> For LAN access use the cross-platform Python Proxy / LAN forwarding; for internet access
+> use an outbound tunnel (Cloudflare Tunnel).
+> 
+> **CRITICAL: REMOTE CLIENTS REQUIRE STRICT HTTPS.** Remote AI clients (Gemini Apps,
+> Gemini Spark, Claude.ai, Claude Desktop, Claude Code remote, Codex CLI, GPT Desktop)
+> **STRICTLY REJECT PLAIN HTTP (`http://`)**. They require valid `https://` URLs backed
+> by public trusted CAs (Cloudflare Edge SSL or Let's Encrypt). Always use `https://`
+> when configuring remote MCP clients.
 
 ### CLI Access
 

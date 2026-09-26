@@ -28,8 +28,8 @@ e os fatos já medidos (não re-investigar).
 
 | Arquivo | O que é |
 |---|---|
-| `fzcomputerai/build.rs` (novo) | Embute VersionInfo no .exe — **funciona, verificado** |
-| `fzcomputerai/Cargo.toml` | `build = "build.rs"` + `winresource` como build-dep só no Windows |
+| `build.rs` (novo) | Embute VersionInfo no .exe — **funciona, verificado** |
+| `Cargo.toml` | `build = "build.rs"` + `winresource` como build-dep só no Windows |
 | `fzcomputerai/Cargo.lock` | consequência do acima |
 | `installer/fzcomputerai.iss` | instalador Inno Setup 
 
@@ -50,7 +50,7 @@ LegalCopyright  : Roger Luft / Webstorage Tecnologia - CC BY 4.0
 O SOFTWARE MOSTRA UMA COISA E FAZ OUTRA.. POR PADRA O CUA ABRE LOCALHOST BASTA FAZER UM NETSH DIRECIONANDO A PORTA 
 A interface exibe `Host/IP = 192.168.0.101`, pinta **LISTENING** em verde e publica
 `http://192.168.0.101:8000/mcp` como "URL de Conexão MCP para Agentes Remotos" —
-mas `check_port_status()` (`fzcomputerai/src/app.rs:189`) conecta em **127.0.0.1**.
+mas `check_port_status()` (`src/app.rs:189`) conecta em **127.0.0.1**.
 Valida um endereço e pinta outro de verde. - 
 
 **Evidência medida nesta máquina:**

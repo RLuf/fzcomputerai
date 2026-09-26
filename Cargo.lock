@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "fzcomputerai"
-version = "2.3.5"
+version = "2.4.1"
 dependencies = [
  "anyhow",
  "eframe",

@@ -7,6 +7,49 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [2.4.1] - 2026-09-25
+
+### Documentação e Usabilidade
+- **Instruções para Clientes OAuth 2.0 Genéricos (n8n, Make)**: Incluídas as configurações exatas para contornar problemas de formulários abertos que exigem chaves explícitas. (Dica de ouro: O Client ID é aceito dinamicamente pelo nosso Proxy Python e o método 'Client Secret Basic' resolve a barreira de entrada da maioria das ferramentas).
+- **Consolidação das Regras de IA**: A regra da pasta de backup (`archived/`) agora faz parte do escopo base do projeto e é a "Regra de Ouro" explícita em todos os readmes.
+
+---
+
+## [2.4.0] - 2026-09-24
+
+### Adicionado
+- **Unificação da Inicialização (Autostart)**: A aplicação agora inicia automaticamente os serviços vitais (o daemon CUA e o proxy OAuth) logo ao iniciar a GUI nativa, eliminando cliques repetitivos.
+- **Limpeza de Zumbis de Rede (Port Killer Aggressive)**: Removida a limitação de bloqueio por sockets em `TIME_WAIT`. A aplicação agora localiza e encerra agressivamente pelo PID via `taskkill` (ou kill nativo) quaisquer processos órfãos ocupando a porta HTTP e Proxy antes de assumir os serviços.
+- **Achamento do Repositório (Flattening)**: Eliminado o nível redundante `fzcomputerai/fzcomputerai/`. Código-fonte (`src/`), manifestos (`Cargo.toml`) e outros artefatos agora residem diretamente na raiz do repositório, simplificando a pipeline CI/CD e padronizando acessos.
+
+### Alterado
+- **Interface Mestre de Logs (UI Simplificada)**: O visual da aba `Rede & Conexões` foi totalmente refinado, abolindo o layout em duas colunas e corrigindo problemas de dupla-rolagem ("2 scrolls"). Agora há um terminal unificado mostrando de forma central os logs do motor em tempo real.
+- **Optimização Extrema do Binário (5.3 MB)**: Implementado o perfil `[profile.release]` no Cargo com flags `opt-level = "s"`, `lto = true` e `strip = true`. Resolve o problema de executáveis inchados e arquivos `.pdb` de 130MB, entregando um aplicativo nativo verdadeiramente otimizado e focado em alta performance.
+- **Instalação Compactada**: O script do Inno Setup (`installer/fzcomputerai.iss`) foi reescrito para embarcar o `server.py` e o código Rust sem depender de movimentação manual de arquivos, automatizando 100% da compilação e deploy.
+
+---
+
+## [2.3.6] - 2026-09-23
+> Suporte a conectores de IA remotos (Gemini Apps, Claude.ai) com **Proxy OAuth 2.1 multiplataforma**, autoconexão sem senha, preflight CORS, e substituição cross-platform para netsh portproxy.
+
+### Adicionado
+- **Proxy Python OAuth 2.1 & LAN gerenciado pela GUI (`mcp-oauth-proxy/server.py`)**:
+  - Servidor em background totalmente integrado ao app nativo, compatível com Linux e Windows.
+  - Elimina a dependência de elevação administrativa (UAC), de comandos `netsh interface portproxy` e do serviço Windows IP Helper (`iphlpsvc`).
+  - Suporte a **Autostart** persistido (`appcfg:py_proxy_autostart`) e porta configurável (padrão 8001).
+  - Injeção automática do Bearer token do motor local para requisições externas autenticadas via OAuth.
+- **Autoconexão OAuth 2.1 sem senha (`oauth.rs`)**:
+  - Quando nenhuma senha estiver definida, `/authorize` agora retorna HTTP 200 com HTML e auto-redirecionamento instantâneo via JS + meta-refresh, além do cabeçalho `Location` para compatibilidade total com clientes headless como Gemini Apps e Claude.ai.
+  - Suporte a registro dinâmico on-the-fly de clientes desconhecidos com `redirect_uri` no `/authorize`.
+  - Suporte dual no endpoint `/token`: parsing de corpos `application/x-www-form-urlencoded` e `application/json`.
+  - Verificação de PKCE com suporte aos métodos `S256` e `plain`.
+- **CORS e Proxy Headers no listener TLS nativo (`tls.rs`)**:
+  - Detecção de cabeçalhos `X-Forwarded-Host` e `X-Forwarded-Proto` para resolução correta de Issuer OAuth através de túneis (Cloudflare / proxies reversos).
+  - Resposta a requisições de preflight CORS (`OPTIONS /mcp`) com cabeçalhos permissivos para permitir requisições de navegadores e conectores web.
+
+### Alterado
+- Versão 2.3.6 em `Cargo.toml`, `package.json` e documentação.
+
 ## [2.3.5] - 2026-09-04
 
 > Correção saída de um caso real: **certificado Let's Encrypt válido por 87 dias no disco e o listener HTTPS parado assim mesmo**, com "Ligar HTTPS" marcado. O endpoint só voltou depois de fechar e reabrir o app.
@@ -65,7 +108,7 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 > Correções que saíram do **teste real na máquina de referência** (instalador v2.2.0 executado de verdade: GUI 2.2.0, motor 0.23.2, skills relinkados, certificado gerado no setup com SANs `127.0.0.1`, `192.168.0.10`, `localhost`).
 
 ### Adicionado
-- **OAuth 2.1 para conectores** (`fzcomputerai/src/oauth.rs`, servido dentro do listener HTTPS): conectores hospedados (Claude.ai, Gemini) e clientes MCP que seguem a especificação de autorização não aceitam bearer estático — eles descobrem o servidor por metadata, registram-se sozinhos e fazem authorization-code com PKCE. Agora o app responde `/.well-known/oauth-protected-resource` (RFC 9728), `/.well-known/oauth-authorization-server` (RFC 8414), `/register` (RFC 7591), `/authorize` (página que pede a **senha de autorização** do app) e `/token` (authorization_code com PKCE S256 obrigatório + refresh_token com rotação). `/mcp` sem `Authorization` recebe 401 com `WWW-Authenticate: Bearer resource_metadata=…` — é assim que o conector descobre o OAuth. O token OAuth é aleatório e vive só no app: o proxy **troca** `Authorization: Bearer <token OAuth>` pelo bearer do **motor** antes de encaminhar — o conector nunca vê o token do motor, e o token do motor direto continua funcionando (compatibilidade). Estado (clientes, códigos, tokens, SHA-256 da senha) em `oauth-state.json` 0600 na pasta dos certificados; nada no registro nem em log. Painel HTTPS: checkbox **OAuth 2.1**, **Gerar senha de autorização** (mostrada uma vez), **Revogar todos os conectores**, contadores.
+- **OAuth 2.1 para conectores** (`src/oauth.rs`, servido dentro do listener HTTPS): conectores hospedados (Claude.ai, Gemini) e clientes MCP que seguem a especificação de autorização não aceitam bearer estático — eles descobrem o servidor por metadata, registram-se sozinhos e fazem authorization-code com PKCE. Agora o app responde `/.well-known/oauth-protected-resource` (RFC 9728), `/.well-known/oauth-authorization-server` (RFC 8414), `/register` (RFC 7591), `/authorize` (página que pede a **senha de autorização** do app) e `/token` (authorization_code com PKCE S256 obrigatório + refresh_token com rotação). `/mcp` sem `Authorization` recebe 401 com `WWW-Authenticate: Bearer resource_metadata=…` — é assim que o conector descobre o OAuth. O token OAuth é aleatório e vive só no app: o proxy **troca** `Authorization: Bearer <token OAuth>` pelo bearer do **motor** antes de encaminhar — o conector nunca vê o token do motor, e o token do motor direto continua funcionando (compatibilidade). Estado (clientes, códigos, tokens, SHA-256 da senha) em `oauth-state.json` 0600 na pasta dos certificados; nada no registro nem em log. Painel HTTPS: checkbox **OAuth 2.1**, **Gerar senha de autorização** (mostrada uma vez), **Revogar todos os conectores**, contadores.
 - Testes: `oauth::` (fluxo completo: metadata, register, senha errada/certa, PKCE errado/certo, refresh com rotação, persistência, revogação) e `tls::oauth_through_proxy_end_to_end` (tudo atravessando o proxy TLS com motor falso que só aceita o bearer do motor).
 - **Let's Encrypt por DNS-01 via API do Cloudflare** — para o caso real: máquina em rede interna (`192.168.0.10`) que precisa de certificado **confiável** num nome como `mcp.exemplo.com.br`. O app cria o TXT `_acme-challenge.<domínio>` na zona pela API, espera o DNS público (DoH do 1.1.1.1) enxergar, valida, finaliza e **remove o TXT** (sucesso ou falha). **Não precisa de porta aberta**: o registro A pode apontar para o IP privado da LAN — a CA só consulta o DNS. Opção **"Criar/atualizar registro A -> IP da LAN"** faz isso pelo app. Token de API (Zone.DNS:Edit + Zone:Read) fica em **arquivo 0600** na pasta dos certificados (`cloudflare-api-token.txt`), nunca no registro, log, console ou argv; botão **Verificar token** confere sem alterar nada. DNS-01 é o padrão; HTTP-01 (porta 80) continua disponível.
 - Cliente HTTPS mínimo interno (`rustls` + verificador de raízes do **sistema**, `rustls-platform-verifier`, já dependência transitiva) para as chamadas curtas da API do Cloudflare e do DoH — sem cliente HTTP novo.
@@ -86,7 +129,7 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 ## [2.2.0] - 2026-09-01
 
 ### Adicionado — HTTPS no endpoint MCP (terminação TLS dentro do app)
-- **Listener HTTPS próprio** (`fzcomputerai/src/tls.rs`): uma thread do processo escuta em `<bind>:8443` (porta e endereço configuráveis: 127.0.0.1, IP da LAN ou 0.0.0.0), termina o TLS com `rustls` e copia bytes para `http://127.0.0.1:<porta>` — o **mesmo desenho do Encaminhamento LAN da v2.1.1**: sem admin, sem regra no sistema, cai junto com o app. O motor oficial continua HTTP-only em loopback (endereço e transporte fixos no código do Cua); nada nele foi tocado. O **bearer token continua obrigatório** — o HTTPS protege o transporte, não substitui a autenticação.
+- **Listener HTTPS próprio** (`src/tls.rs`): uma thread do processo escuta em `<bind>:8443` (porta e endereço configuráveis: 127.0.0.1, IP da LAN ou 0.0.0.0), termina o TLS com `rustls` e copia bytes para `http://127.0.0.1:<porta>` — o **mesmo desenho do Encaminhamento LAN da v2.1.1**: sem admin, sem regra no sistema, cai junto com o app. O motor oficial continua HTTP-only em loopback (endereço e transporte fixos no código do Cua); nada nele foi tocado. O **bearer token continua obrigatório** — o HTTPS protege o transporte, não substitui a autenticação.
 - **Certificado auto-assinado gerado automaticamente** (`rcgen`, ECDSA P-256, 825 dias, SANs: `localhost`, `127.0.0.1`, IP da LAN, nome da máquina e o domínio configurado). Gerado **na instalação** (o setup roda `fzcomputerai --tls-init`, inclusive no upgrade silencioso) **ou no primeiro run, o que vier primeiro** — idempotente: um cert válido que já cobre os SANs é mantido, para o fingerprint não mudar à toa. Renovação automática com menos de 30 dias. Arquivos em `%APPDATA%\FzComputerAI\tls\` (portátil: `tls\` ao lado do exe).
 - **Let's Encrypt** (ACME RFC 8555 via `instant-acme`, desafio **HTTP-01**): informe domínio público e e-mail, clique **Emitir**. O app abre um respondedor temporário em `0.0.0.0:80` só durante a emissão; conta ACME persistida; **renovação automática** com menos de 30 dias; opção *staging* para testar sem gastar limite de rate. Pré-requisitos reais e documentados: DNS do domínio -> IP público desta máquina e porta 80 alcançável (roteador + firewall). Let's Encrypt não emite para IP.
 - **Certificado próprio**: caminhos `.crt`/`.key` PEM informados pelo usuário.
@@ -193,7 +236,7 @@ Desinstalar → instalar (setup baixado do release) → abrir → Iniciar → Ap
 
 ### Adicionado (empacotamento e release)
 - **Pacote portátil Windows** (`fzcomputerai-portable-v<versão>-windows-x64.zip`): exe + marcador `fzcomputerai.portable` (preferências em `.ini` ao lado, sem registro, sem autostart) + LEIA-ME + licença; gerado por `scripts/make-portable.ps1` e agora também no CI, com `.sha256`.
-- **Pacotes Linux no CI**: `.deb` (cargo-deb), `.rpm` (cargo-generate-rpm) e **AppImage** (appimagetool oficial) — sem snap, sem dmg, por decisão do projeto. Metadados em `fzcomputerai/Cargo.toml` (`[package.metadata.deb]`/`[package.metadata.generate-rpm]`).
+- **Pacotes Linux no CI**: `.deb` (cargo-deb), `.rpm` (cargo-generate-rpm) e **AppImage** (appimagetool oficial) — sem snap, sem dmg, por decisão do projeto. Metadados em `Cargo.toml` (`[package.metadata.deb]`/`[package.metadata.generate-rpm]`).
 - **Corpo do release** lista também `Source code (zip / tar.gz)` (anexados automaticamente pelo GitHub) e descreve cada artefato; continua listando **somente o que existe de fato**.
 - **`verify-install.ps1` honesto de ponta a ponta**: a checagem do motor **executa** `--version` (PATH → caminho canônico) e imprime a versão real — junction pendurada agora sai `[FALHA]` com causa, não `[OK]` mentiroso; o teste de MCP envia `Authorization: Bearer` quando o token existe em `HKCU\Environment` e traduz `401` em diagnóstico (token ausente × token divergente).
 - **Proteção contra lock órfão** do instalador oficial do motor (`~/.cua-driver/install.lock` de instalação morta, >30 min): removido antes de invocar o `install.ps1` — no `.iss` e nos dois fluxos da GUI. Uma instalação travada às 11:33 segurou o lock por 4h e pendurou todas as instalações seguintes; o próprio `install.ps1` oficial espera o lock para sempre.
@@ -215,11 +258,11 @@ Desinstalar → instalar (setup baixado do release) → abrir → Iniciar → Ap
   - "Depois" é respeitado: não reabre a Central afirmando "atualizada" com o instalador ainda estacionado no `%TEMP%`.
 
 ### Alterado (licenciamento)
-- **Licença alterada de CC BY 4.0 para MIT.** Motivo: a própria Creative Commons **não recomenda** licenças CC para software (não tratam código-fonte nem patentes), e a CC-BY cria fricção de adoção para quem quer depender do projeto. A MIT é também a licença do projeto **Cua** (`trycua/cua`), o que torna o ecossistema coerente. Copyright do FzComputerAI: `(c) 2026 Roger Luft (VeilWalker) — Webstorage Tecnologia`. Atualizados `fzcomputerai/Cargo.toml`, `package.json`, `installer/LICENSE.txt`, READMEs e `AGENTS.md` §3.
+- **Licença alterada de CC BY 4.0 para MIT.** Motivo: a própria Creative Commons **não recomenda** licenças CC para software (não tratam código-fonte nem patentes), e a CC-BY cria fricção de adoção para quem quer depender do projeto. A MIT é também a licença do projeto **Cua** (`trycua/cua`), o que torna o ecossistema coerente. Copyright do FzComputerAI: `(c) 2026 Roger Luft (VeilWalker) — Webstorage Tecnologia`. Atualizados `Cargo.toml`, `package.json`, `installer/LICENSE.txt`, READMEs e `AGENTS.md` §3.
 - **Criado `LICENSE.md` na raiz** — o arquivo **não existia** (havia apenas `installer/LICENSE.txt`), embora o `AGENTS.md` já exigisse preservar copyright nele. Agora contém: a MIT do FzComputerAI, o **texto integral da MIT do projeto Cua** (`Copyright (c) 2025 Cua AI, Inc.`, conforme exigido pela licença), a **citação formal** pedida pelos autores (`@software{cua2025...}`), a lista de componentes de terceiros (egui/eframe, cloudflared, ngrok, OpenSSH) e uma seção de **agradecimento** à Cua AI, Inc. e à comunidade do Cua — o `cua-driver` é a base sobre a qual esta GUI foi construída.
 
 ### Adicionado (interface)
-- **Ícone próprio do aplicativo.** O repositório **não tinha nenhum `.ico`** — por isso o Windows exibia ícone genérico na busca, na barra de tarefas e no título. Agora há `installer/fzcomputerai.ico` (multi-tamanho: 16/32/48/64/128/256), gerado de forma reproduzível por `scripts/make-icon.ps1`, e o ícone da **janela em execução** (`ViewportBuilder::with_icon`), que é um caminho separado do recurso do `.exe`: usa `fzcomputerai/assets/icon64.rgba` (RGBA cru embutido por `include_bytes!`, para não precisar da feature `image` do eframe — zero dependência nova).
+- **Ícone próprio do aplicativo.** O repositório **não tinha nenhum `.ico`** — por isso o Windows exibia ícone genérico na busca, na barra de tarefas e no título. Agora há `installer/fzcomputerai.ico` (multi-tamanho: 16/32/48/64/128/256), gerado de forma reproduzível por `scripts/make-icon.ps1`, e o ícone da **janela em execução** (`ViewportBuilder::with_icon`), que é um caminho separado do recurso do `.exe`: usa `assets/icon64.rgba` (RGBA cru embutido por `include_bytes!`, para não precisar da feature `image` do eframe — zero dependência nova).
 - **Seção DONATE no diálogo Sobre**, com botão para **GitHub Sponsors** (`github.com/sponsors/RLuf`), link copiável e coração desenhado no painter (a fonte padrão não tem glifo de emoji). Adicionados `.github/FUNDING.yml` e badge de patrocínio nos READMEs.
 - **Crédito ao projeto Cua dentro do app**: o diálogo Sobre agora exibe a licença MIT, o copyright da Cua AI, Inc., o agradecimento e o link para o repositório oficial.
 

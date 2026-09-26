@@ -371,11 +371,27 @@ pub struct AppState {
     /// ficar mentindo quando o motor foi (re)iniciado fora da GUI.
     status_watch: Option<StatusWatch>,
 
+    // ─── Proxy Python OAuth 2.1 & LAN (Cross-Platform) ─────────────────
+    pub py_proxy_autostart: bool,
+    pub py_proxy_port: String,
+    pub py_proxy_status: PyProxyStatus,
+    pub py_proxy_pid: Option<u32>,
+    pub py_proxy_error: String,
+    pub py_proxy_child: Option<std::process::Child>,
+
     // Estado interno (privado — só o app.rs mexe).
     tunnel_child: Option<std::process::Child>,
     tunnel_gate_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     tunnel_last_poll: Option<std::time::Instant>,
     tunnel_last_probe: Option<std::time::Instant>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyProxyStatus {
+    Stopped,
+    Starting,
+    Running,
+    Error,
 }
 
 impl Default for AppState {
@@ -502,6 +518,13 @@ impl Default for AppState {
             tls_retry_check: None,
             status_watch: None,
 
+            py_proxy_autostart: false,
+            py_proxy_port: "8001".to_string(),
+            py_proxy_status: PyProxyStatus::Stopped,
+            py_proxy_pid: None,
+            py_proxy_error: String::new(),
+            py_proxy_child: None,
+
             tunnel_child: None,
             tunnel_gate_stop: None,
             tunnel_last_poll: None,
@@ -525,6 +548,7 @@ impl Default for AppState {
         state.tls_startup();
         #[cfg(target_os = "windows")]
         state.read_autostart();
+        state.read_py_proxy_cfg();
         state.fetch_screen_info();
         state
     }
@@ -1533,6 +1557,7 @@ impl AppState {
         self.stop_lan_forward();
         // Listener HTTPS: idem — thread do processo, cai junto.
         self.stop_tls();
+        self.stop_py_proxy();
 
         // ===================================================================
         // LIMPEZA NATIVA — NUNCA VOLTE A FAZER ISTO COM POWERSHELL OCULTO
@@ -1876,24 +1901,8 @@ impl AppState {
     /// console segue (`poll_engine_log`). O autostart do Windows continua
     /// existindo para o logon — este caminho é o da GUI.
     pub fn start_daemon(&mut self) {
-        // JÁ ESTÁ NO AR? Então não encoste. "Iniciar" com o endpoint
-        // respondendo derrubava um daemon saudável e, por causa do TIME_WAIT do
-        // Windows (sockets da porta 8000 que já tiveram conexão ficam retidos
-        // por minutos), o novo `serve` não conseguia mais o bind:
-        // "MCP HTTP transport disabled (os error 10048)". Resultado prático:
-        // clicar Iniciar QUEBRAVA o que estava funcionando.
-        self.check_port_status();
-        if self.port_active {
-            self.daemon_running = true;
-            self.log_debug(
-                "[daemon] Ja esta no ar (endpoint respondendo): nada a fazer. Use Reiniciar para forcar uma troca de processo.",
-            );
-            self.status_msg = self.tr(
-                "O motor ja esta em execucao — endpoint respondendo.",
-                "The engine is already running — endpoint responding.",
-            );
-            return;
-        }
+        self.stop_daemon();
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         #[cfg(target_os = "windows")]
         {
@@ -2044,6 +2053,10 @@ impl AppState {
 
         self.check_port_status();
         self.daemon_running = self.port_active;
+
+        if self.daemon_running {
+            self.start_py_proxy();
+        }
     }
 
     /// Gera um bearer token e o persiste em `HKCU\Environment`, devolvendo-o.
@@ -2173,9 +2186,41 @@ impl AppState {
         None
     }
 
+    fn force_kill_port(&mut self, port: &str) {
+        #[cfg(target_os = "windows")]
+        {
+            for _ in 0..5 {
+                let out = quiet_cmd("cmd")
+                    .args(["/c", &format!("netstat -ano | findstr :{} | findstr LISTENING", port)])
+                    .output().unwrap_or_else(|_| std::process::Output { status: Default::default(), stdout: vec![], stderr: vec![] });
+                let out_str = String::from_utf8_lossy(&out.stdout);
+                let mut found = false;
+                for line in out_str.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 5 {
+                        let pid = parts[4];
+                        if pid != "0" && pid != "4" { // Ignora SYSTEM
+                            let _ = quiet_cmd("taskkill").args(["/F", "/PID", pid]).output();
+                            found = true;
+                        }
+                    }
+                }
+                if !found { break; }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+
     pub fn stop_daemon(&mut self) {
         let exe = Self::engine_exe();
         let _ = self.run_logged(&exe, &["stop"]);
+        self.stop_py_proxy();
+        
+        let http = self.http_port.trim().to_string();
+        let proxy = self.py_proxy_port.trim().to_string();
+        self.force_kill_port(&http);
+        self.force_kill_port(&proxy);
+
         self.check_port_status();
         self.daemon_running = self.port_active;
     }
@@ -3531,6 +3576,227 @@ impl AppState {
         self.lan_forward_addr = None;
     }
 
+    // ─── Proxy Python OAuth 2.1 & LAN (Cross-Platform) ─────────────────
+
+    pub fn py_proxy_log_path(&self) -> std::path::PathBuf {
+        Self::tunnel_dir().join("py_proxy.log")
+    }
+
+    /// Tenta localizar o executável python (python / python3 / py).
+    pub fn resolve_python(&self) -> Option<String> {
+        for candidate in &["python", "python3", "py"] {
+            if let Ok(out) = quiet_cmd(candidate).arg("--version").output() {
+                if out.status.success() {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Tenta localizar o script server.py no projeto, ao lado do exe, ou em mcp-oauth-proxy.
+    pub fn resolve_py_proxy_script(&self) -> Option<std::path::PathBuf> {
+        let mut candidates = Vec::new();
+
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                candidates.push(parent.join("mcp-oauth-proxy").join("server.py"));
+                candidates.push(parent.join("server.py"));
+                if let Some(p2) = parent.parent() {
+                    candidates.push(p2.join("mcp-oauth-proxy").join("server.py"));
+                    if let Some(p3) = p2.parent() {
+                        candidates.push(p3.join("mcp-oauth-proxy").join("server.py"));
+                    }
+                }
+            }
+        }
+
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join("mcp-oauth-proxy").join("server.py"));
+            candidates.push(cwd.join("fzcomputerai").join("mcp-oauth-proxy").join("server.py"));
+            candidates.push(cwd.join("server.py"));
+            if let Some(parent) = cwd.parent() {
+                candidates.push(parent.join("mcp-oauth-proxy").join("server.py"));
+            }
+        }
+
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| ".".into());
+        let home_path = std::path::PathBuf::from(home);
+        candidates.push(home_path.join("mcp-oauth-proxy").join("server.py"));
+        candidates.push(home_path.join(".config").join("fzcomputerai").join("server.py"));
+
+        for path in candidates {
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    pub fn set_py_proxy_autostart(&mut self, enable: bool) {
+        self.py_proxy_autostart = enable;
+        self.cfg_set("appcfg:py_proxy_autostart", if enable { "1" } else { "0" });
+        self.log_debug(&format!(
+            "[proxy] Autostart do Proxy Python: {}",
+            if enable { "ATIVADO" } else { "DESATIVADO" }
+        ));
+    }
+
+    pub fn set_py_proxy_port(&mut self, port: String) {
+        self.py_proxy_port = port.clone();
+        self.cfg_set("appcfg:py_proxy_port", &port);
+    }
+
+    pub fn read_py_proxy_cfg(&mut self) {
+        if let Some(v) = self.cfg_get("appcfg:py_proxy_autostart") {
+            self.py_proxy_autostart = v == "1";
+        }
+        if let Some(v) = self.cfg_get("appcfg:py_proxy_port") {
+            let trimmed = v.trim().to_string();
+            if !trimmed.is_empty() {
+                self.py_proxy_port = trimmed;
+            }
+        }
+        if self.py_proxy_autostart {
+            self.log_debug("[proxy] Autostart ativo — iniciando Proxy Python...");
+            self.start_py_proxy();
+        }
+    }
+
+    pub fn start_py_proxy(&mut self) {
+        self.stop_py_proxy();
+
+        let Some(python_bin) = self.resolve_python() else {
+            self.py_proxy_status = PyProxyStatus::Error;
+            self.py_proxy_error = self.tr(
+                "Python não encontrado (instale Python 3 e verifique o PATH).",
+                "Python not found (install Python 3 and verify PATH).",
+            ).to_string();
+            self.log_debug("[proxy] ERRO: Python não encontrado.");
+            return;
+        };
+
+        let Some(script_path) = self.resolve_py_proxy_script() else {
+            self.py_proxy_status = PyProxyStatus::Error;
+            self.py_proxy_error = self.tr(
+                "Script mcp-oauth-proxy/server.py não encontrado.",
+                "Script mcp-oauth-proxy/server.py not found.",
+            ).to_string();
+            self.log_debug("[proxy] ERRO: server.py não encontrado.");
+            return;
+        };
+
+        let proxy_port = self.py_proxy_port.trim().to_string();
+        let backend_url = format!("http://127.0.0.1:{}", self.http_port.trim());
+        let token = self.mcp_token.trim().to_string();
+
+        let dir = Self::tunnel_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let log = self.py_proxy_log_path();
+        let _ = std::fs::remove_file(&log);
+
+        let file = match std::fs::File::create(&log) {
+            Ok(f) => f,
+            Err(e) => {
+                self.py_proxy_status = PyProxyStatus::Error;
+                self.py_proxy_error = format!("Falha ao criar log do proxy: {e}");
+                return;
+            }
+        };
+        let file2 = match file.try_clone() {
+            Ok(f) => f,
+            Err(e) => {
+                self.py_proxy_status = PyProxyStatus::Error;
+                self.py_proxy_error = format!("Falha ao clonar log do proxy: {e}");
+                return;
+            }
+        };
+
+        let mut cmd = quiet_cmd(&python_bin);
+        cmd.arg(&script_path)
+            .arg("--port")
+            .arg(&proxy_port)
+            .arg("--backend")
+            .arg(&backend_url);
+
+        if !token.is_empty() {
+            cmd.arg("--token").arg(&token);
+            cmd.env("CUA_DRIVER_RS_MCP_HTTP_TOKEN", &token);
+        }
+        cmd.env("OAUTH_PROXY_PORT", &proxy_port);
+        cmd.env("CUA_BACKEND_URL", &backend_url);
+
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::from(file))
+            .stderr(std::process::Stdio::from(file2));
+
+        match cmd.spawn() {
+            Ok(child) => {
+                let pid = child.id();
+                self.py_proxy_child = Some(child);
+                self.py_proxy_pid = Some(pid);
+                self.py_proxy_status = PyProxyStatus::Running;
+                self.py_proxy_error.clear();
+                self.log_debug(&format!(
+                    "[proxy] Servidor Proxy Python iniciado (PID {}, porta {}, destino {}) [log: {}]",
+                    pid, proxy_port, backend_url, log.display()
+                ));
+            }
+            Err(e) => {
+                self.py_proxy_status = PyProxyStatus::Error;
+                self.py_proxy_error = format!("Falha ao iniciar Python proxy: {e}");
+                self.log_debug(&format!("[proxy] ERRO ao spawnar Python: {e}"));
+            }
+        }
+    }
+
+    pub fn stop_py_proxy(&mut self) {
+        if let Some(mut child) = self.py_proxy_child.take() {
+            let pid = child.id();
+            let _ = child.kill();
+            self.log_debug(&format!("[proxy] Servidor Proxy Python (PID {}) encerrado.", pid));
+        }
+        self.py_proxy_pid = None;
+        self.py_proxy_status = PyProxyStatus::Stopped;
+    }
+
+    pub fn open_py_proxy_log(&mut self) {
+        let log = self.py_proxy_log_path();
+        if !log.exists() {
+            let _ = std::fs::create_dir_all(Self::tunnel_dir());
+            let _ = std::fs::write(&log, "Proxy log inicializado.\n");
+        }
+        let _ = open::that(&log);
+    }
+
+    pub fn poll_py_proxy(&mut self) {
+        if let Some(ref mut child) = self.py_proxy_child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.py_proxy_child = None;
+                    self.py_proxy_pid = None;
+                    self.py_proxy_status = if status.success() {
+                        PyProxyStatus::Stopped
+                    } else {
+                        PyProxyStatus::Error
+                    };
+                    self.log_debug(&format!(
+                        "[proxy] Processo do proxy Python encerrou com status: {:?}",
+                        status
+                    ));
+                }
+                Ok(None) => {
+                    self.py_proxy_status = PyProxyStatus::Running;
+                }
+                Err(e) => {
+                    self.log_debug(&format!("[proxy] Erro ao monitorar proxy Python: {e}"));
+                }
+            }
+        }
+    }
+
     /// Encerra o gate: sinaliza a thread e destrava o accept com uma conexão
     /// dummy no próprio porteiro.
     fn stop_gate(&mut self) {
@@ -4791,6 +5057,7 @@ fn tail_str(s: &str, max: usize) -> String {
 
 #[derive(Default)]
 pub struct FzComputerApp {
+    pub initial_startup_done: bool,
     pub state: AppState,
     /// Bandeja do sistema. Criada sob demanda (só quando o usuário liga
     /// "minimizar para a bandeja"), para não deixar ícone na área de
@@ -4923,6 +5190,11 @@ impl eframe::App for FzComputerApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.initial_startup_done {
+            self.initial_startup_done = true;
+            self.state.start_daemon();
+        }
+
         setup_fazai_theme(ctx);
 
         // Observa o download do upgrade em background (throttle interno de 1s).
@@ -4935,6 +5207,7 @@ impl eframe::App for FzComputerApp {
         // binários de túnel (throttle interno de 1s cada).
         self.state.poll_tunnel();
         self.state.poll_tunnel_download();
+        self.state.poll_py_proxy();
         // HTTPS: progresso da emissão Let's Encrypt e renovação periódica.
         self.state.poll_tls();
         // Vigia de status: o badge do motor/HTTPS nunca fica desatualizado

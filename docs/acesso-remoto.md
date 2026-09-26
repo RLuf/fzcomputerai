@@ -16,7 +16,7 @@ O `cua-driver` expõe o MCP HTTP em `127.0.0.1:<porta>` e **em nenhum outro ende
 
 Uma versão anterior da documentação deste projeto afirmava que havia bind `0.0.0.0`. **Era falso.** Foi corrigido no código e no texto. O que aconteceu na prática: a GUI gravava uma variável que o motor **ignora**, e a tela sugeria LAN onde não havia LAN. Hoje o botão se chama apenas **Aplicar Porta**, o console registra a nota explicando o limite, e a GUI **apaga** a variável morta se encontrar sobra dela em `HKCU\Environment`.
 
-**Se você está pensando em reintroduzir a ideia:** não grave a variável por suposição. O critério do projeto é verificação real — se algum dia o upstream aceitar bind configurável, a mudança entra junto com confirmação no `netstat`, não antes. O comentário longo em `apply_env_port()` (`fzcomputerai/src/app.rs`) está lá para isso.
+**Se você está pensando em reintroduzir a ideia:** não grave a variável por suposição. O critério do projeto é verificação real — se algum dia o upstream aceitar bind configurável, a mudança entra junto com confirmação no `netstat`, não antes. O comentário longo em `apply_env_port()` (`src/app.rs`) está lá para isso.
 
 Um detalhe de leitura que causa falso positivo: no `netstat`, um listener em espera mostra `0.0.0.0:0` na coluna **REMOTO**. Isso é o formato do Windows para "aguardando conexões", não um bind em todas as interfaces. O bind é a coluna **LOCAL**.
 

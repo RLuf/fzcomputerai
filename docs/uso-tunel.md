@@ -4,7 +4,7 @@ Para quem precisa que um agente fora da sua rede alcance este computador, e quer
 
 Leia o aviso primeiro: o endpoint MCP dá controle de **mouse, teclado e tela** desta máquina. Quem alcança a URL e passa pela autenticação existente controla o computador. Uma URL aleatória **não é** autenticação — é só uma URL difícil de adivinhar, e ela vaza em log, histórico de navegador, print de tela e arquivo de configuração de cliente MCP.
 
-Código: `fzcomputerai/src/tabs/tunnel.rs` (interface) e a seção "ABA TÚNEL" de `fzcomputerai/src/app.rs` (comportamento).
+Código: `src/tabs/tunnel.rs` (interface) e a seção "ABA TÚNEL" de `src/app.rs` (comportamento).
 
 ## 1. Como funciona no geral
 

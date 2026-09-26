@@ -2,7 +2,7 @@
 
 Para quem vai colocar o endpoint MCP de pé e precisa entender exatamente o que cada badge está afirmando.
 
-Esta é a seção inicial do aplicativo. Ela tem três áreas: **controles do serviço** (topo, sempre visível), **configuração de porta/IP e encaminhamento** (meio, sempre visível) e **diagnóstico** (embaixo, única área que rola). A saída de todo comando vai para o console global do rodapé — comum a todas as seções. Código: `fzcomputerai/src/tabs/network.rs` e os métodos correspondentes em `fzcomputerai/src/app.rs`.
+Esta é a seção inicial do aplicativo. Ela tem três áreas: **controles do serviço** (topo, sempre visível), **configuração de porta/IP e encaminhamento** (meio, sempre visível) e **diagnóstico** (embaixo, única área que rola). A saída de todo comando vai para o console global do rodapé — comum a todas as seções. Código: `src/tabs/network.rs` e os métodos correspondentes em `src/app.rs`.
 
 ## 1. Controles do serviço CUA Driver
 

@@ -1,8 +1,8 @@
 # HTTPS no endpoint MCP
 
-> **Versão:** recurso introduzido na **v2.2.0**. Código: `fzcomputerai/src/tls.rs` (mecânica) e o bloco
-> `impl AppState` "HTTPS do endpoint MCP" em `fzcomputerai/src/app.rs` (orquestração); tela em
-> `fzcomputerai/src/tabs/network.rs` (`render_https`).
+> **Versão:** recurso introduzido na **v2.2.0**. Código: `src/tls.rs` (mecânica) e o bloco
+> `impl AppState` "HTTPS do endpoint MCP" em `src/app.rs` (orquestração); tela em
+> `src/tabs/network.rs` (`render_https`).
 
 ## O problema que isto resolve
 

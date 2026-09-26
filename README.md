@@ -23,6 +23,16 @@
 >
 > O motor de automação é o **`cua-driver`**, do projeto open-source [**Cua**](https://github.com/trycua/cua) (MIT, Cua AI, Inc.). O FzComputerAI **não substitui o motor** — é o cockpit dele.
 
+### ✨ Novidades da v2.4.1
+- **Melhoria na Documentação de Conexões Externas**: Instruções completas e testadas para orquestradores que utilizam OAuth genérico (como n8n, Make), informando os campos exatos de proxy.
+
+### ✨ Novidades da v2.4.0
+- **Inicialização 1-Click Zero-Config**: O Proxy OAuth 2.1 e o Daemon iniciam sozinhos.
+- **Port Killer Antizumbi**: Garante conectividade real derrubando processos fantasmas e garantindo a porta `8000`.
+- **Binário Ultra Otimizado**: Tamanho do executável reduzido para ~5MB através do `opt-level=s` e strip agressivo. Nada de arquivos PDB gigantes e pesados.
+- **Estrutura Flat**: Todo o projeto agora reside na raiz. Chega de `fzcomputerai/fzcomputerai/`. A documentação, Inno Setup e pacotes compilarão redondinhos.
+- **Aba de Rede Mestre**: Interface super simplificada, com os logs em tempo real fundidos de forma limpa.
+
 ---
 
 ## 🖼️ A ferramenta
@@ -229,7 +239,7 @@ O instalador (Inno Setup, bilíngue PT-BR / English) faz:
 
 **b) Build local do instalador (para quem compila do fonte)** — o antigo `install.ps1` da raiz foi removido; o instalador gráfico é o único caminho de instalação no Windows. Quem compila do código-fonte gera o mesmo instalador localmente:
 ```powershell
-cargo build --release --manifest-path fzcomputerai/Cargo.toml
+cargo build --release --manifest-path Cargo.toml
 ISCC.exe /DAppVersion=<versao> installer\fzcomputerai.iss
 ```
 > Requer o [Inno Setup](https://jrsoftware.org/isinfo.php) instalado (`ISCC.exe` no PATH ou caminho completo). O `fzcomputerai-setup-windows-x64.exe` resultante fica em `dist/`.
@@ -258,7 +268,7 @@ tar -xzf fzcomputerai-<versão>.tgz
 cd package (ou fzcomputerai)
 
 # Compilação do motor e da GUI Rust:
-cargo build --release --manifest-path fzcomputerai/Cargo.toml
+cargo build --release --manifest-path Cargo.toml
 ```
 
 Para instruções detalhadas de compilação e configurações avançadas, consulte o [INSTALL.md](INSTALL.md).
@@ -300,6 +310,82 @@ claude mcp add --transport stdio fz-computer-vision -- cua-driver mcp
 ```
 
 ---
+
+## 🔒 Conexão de Clientes Remotos (HTTPS Estrito Obrigatório)
+
+> [!IMPORTANT]
+> **HTTPS É OBRIGATÓRIO PARA CLIENTES REMOTOS**:
+> Interfaces como **Gemini App**, **Gemini Spark**, **Claude.ai**, **Claude Desktop**, **Codex CLI** e **GPT Desktop** **NÃO ACEITAM HTTP SIMPLES** (`http://`). Elas exigem estritamente conexões via **`https://`** respaldadas por certificados SSL/TLS válidos emitidos por autoridades públicas reconhecidas (CAs).
+
+### 1. Cenário Recomendado: Cloudflare Tunnel + Proxy OAuth 2.1 (v2.3.6)
+Neste cenário, a **Cloudflare gerencia a terminação TLS** na borda com certificado HTTPS globalmente confiável, encaminhando internamente para o Proxy Python do FzComputerAI:
+
+```text
+[Cliente de IA Remoto] (Gemini, Claude, GPT)
+        │
+        │  HTTPS (Obrigatório - TLS 1.3)
+        ▼
+[Borda Cloudflare] (https://mcpoahome.seudominio.com.br)
+        │
+        │  Conexão de saída (Túnel Reverso cloudflared)
+        ▼
+[Proxy Python FzComputerAI] (127.0.0.1:8001)
+  ├── Atende /.well-known/oauth-authorization-server
+  ├── Realiza autoconexão no /authorize (sem bloqueio)
+  ├── Valida / emite tokens OAuth 2.1 no /token
+  └── Injeta o Bearer Token secreto do motor local
+        │
+        │  HTTP Loopback (127.0.0.1)
+        ▼
+[Motor CUA Driver MCP] (127.0.0.1:8000/mcp)
+```
+
+#### Como Configurar os Clientes:
+
+- **Gemini Apps / Gemini Spark / Claude.ai (Web)**:
+  - Adicione um conector MCP remoto.
+  - **URL do Servidor**: `https://mcpoahome.seudominio.com.br/mcp` *(SEMPRE com `https://`)*.
+  - O conector descobre automaticamente os metadados OAuth 2.1 em `/.well-known/oauth-authorization-server`.
+  - A autorização ocorre de forma instantânea e automática (autoconexão fallback sem atrito).
+
+- **n8n / Make / Clientes Genéricos OAuth 2.0**:
+  - Para orquestradores que pedem preenchimento manual dos endpoints OAuth, utilize:
+    - **CLIENT ID**: `n8n` (ou qualquer texto, o proxy auto-registra clientes desconhecidos)
+    - **CLIENT SECRET**: `dummy` (ou qualquer texto)
+    - **AUTHORIZATION URL**: `https://mcpoahome.seudominio.com.br/authorize`
+    - **TOKEN URL**: `https://mcpoahome.seudominio.com.br/token`
+    - **TOKEN AUTHENTICATION METHOD**: `Client Secret Basic` (ou `Header Auth`)
+    - **SCOPES**: `mcp`
+
+- **Claude Code CLI (Remoto)**:
+  ```bash
+  claude mcp add --transport sse fz-computer-vision https://mcpoahome.seudominio.com.br/mcp
+  ```
+
+- **Cursor / Windsurf / Codex CLI / GPT Desktop (Remoto com Bearer Token)**:
+  ```json
+  {
+    "mcpServers": {
+      "fz-computer-vision": {
+        "url": "https://mcpoahome.seudominio.com.br/mcp",
+        "headers": {
+          "Authorization": "Bearer SEU_TOKEN_AQUI"
+        }
+      }
+    }
+  }
+  ```
+
+---
+
+### 2. Cenário Direto: HTTPS Nativo do FzComputerAI (Sem Cloudflare)
+Se você não utiliza Cloudflare Tunnel e deseja conectar agentes remotos diretamente ao seu IP ou domínio:
+1. Acesse a aba **MCP & Rede** no FzComputerAI e vá até a seção **HTTPS do endpoint MCP**.
+2. Marque **Ligar HTTPS** e configure a porta (padrão `8443`).
+3. **Certificado**:
+   - Conectores em nuvem (Gemini Apps, Claude.ai) **recusam certificados auto-assinados**.
+   - Selecione **Let's Encrypt** (emissão com 1 clique via DNS-01 Cloudflare ou HTTP-01 porta 80) ou informe seu certificado confiável próprio (`.crt` e `.key` PEM).
+4. No cliente, aponte para: `https://seu-dominio.com:8443/mcp`.
 
 ## 🤝 Patrocinadores Oficiais & Apoio (Patrons)
 
