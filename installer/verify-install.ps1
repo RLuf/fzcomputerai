@@ -13,6 +13,7 @@
 #   6. Em QUAIS enderecos a porta esta OUVINDO de fato (netstat)
 #   7. O MCP esta FUNCIONAL?              (conexao TCP real em 127.0.0.1)
 #   8. Certificado auto-assinado do endpoint HTTPS (gerado no setup)
+#   9. Cloudflare Tunnel (cloudflared)    (opcional: exposicao publica do MCP)
 #
 # Texto em ASCII de proposito: o Windows PowerShell 5.1 le este arquivo com a
 # codepage ANSI local e acentuacao viraria mojibake.
@@ -179,6 +180,21 @@ if (Test-Path $tlsCrt) {
     }
 } else {
     Info "Certificado HTTPS ainda nao gerado ($tlsCrt) - a GUI gera no primeiro run. Log: $tlsDir\tls-init.log"
+}
+
+# --- 9. Cloudflare Tunnel (cloudflared) - exposicao remota ------------------
+Write-Host ""
+$cfBin = Get-Command cloudflared.exe -ErrorAction SilentlyContinue
+$cfLocal = Join-Path $env:LOCALAPPDATA 'FzComputerAI\bin\cloudflared.exe'
+if ($cfBin) {
+    Ok "Cloudflare Tunnel (cloudflared) disponivel no PATH: $($cfBin.Source)"
+} elseif (Test-Path $cfLocal) {
+    Ok "Cloudflare Tunnel (cloudflared) disponivel em: $cfLocal"
+} else {
+    Info "Cloudflare Tunnel (cloudflared) nao instalado (opcional)."
+    Info "   Para expor o MCP na internet via tunel seguro:"
+    Info "   - Clique em 'Baixar cloudflared' na aba Tunel da GUI, OU"
+    Info "   - Execute o script: powershell -ExecutionPolicy Bypass -File ""$appDir\scripts\install-cloudflared.ps1"""
 }
 
 Write-Host ""

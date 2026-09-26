@@ -84,7 +84,7 @@
 #endif
 
 #ifndef SourceExe
-  #define SourceExe "..\fzcomputerai\target\release\fzcomputerai.exe"
+  #define SourceExe "..\target\release\fzcomputerai.exe"
 #endif
 
 #ifndef ExeName
@@ -530,8 +530,14 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#ExeName}"; Components: ma
 Source: "{#CuaScriptsDir}\install.ps1";          DestDir: "{app}\cua-driver"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#CuaScriptsDir}\_install-common.psm1"; DestDir: "{app}\cua-driver"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
 
-; --- Proxy OAuth 2.1 e LAN -------------------------------------------------
-Source: "..\mcp-oauth-proxy\server.py"; DestDir: "{app}\mcp-oauth-proxy"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+; --- Proxy OAuth 2.1 e LAN (Python) ----------------------------------------
+Source: "..\mcp-oauth-proxy\server.py";        DestDir: "{app}\mcp-oauth-proxy"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\mcp-oauth-proxy\requirements.txt"; DestDir: "{app}\mcp-oauth-proxy"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\mcp-oauth-proxy\start-proxy.bat";   DestDir: "{app}\mcp-oauth-proxy"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\mcp-oauth-proxy\README.md";        DestDir: "{app}\mcp-oauth-proxy"; Components: main; Flags: ignoreversion skipifsourcedoesntexist
+
+; --- Ferramentas de tunel e scripts auxiliares ------------------------------
+Source: "..\scripts\install-cloudflared.ps1";   DestDir: "{app}\scripts";         Components: main; Flags: ignoreversion skipifsourcedoesntexist
 
 ; --- Componente "docs" -----------------------------------------------------
 ; Licenca e relatorio de verificacao pos-instalacao (testes reais: POST
