@@ -103,6 +103,7 @@ struct Pending {
 }
 
 /// Requisição HTTP já lida pelo proxy (cabeçalho + corpo).
+#[allow(dead_code)]
 pub struct HttpReq<'a> {
     pub method: &'a str,
     pub path: &'a str,
@@ -258,6 +259,7 @@ fn is_cimd_client_id(client_id: &str) -> bool {
     client_id.starts_with("https://") && client_id.len() < 512
 }
 
+#[allow(dead_code)]
 fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
 }

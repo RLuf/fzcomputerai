@@ -375,6 +375,7 @@ impl TlsProxyHandle {
 /// Sobe o listener HTTPS em `<bind_ip>:<port>` encaminhando para
 /// `127.0.0.1:<upstream_port>`. Cada conexão: handshake rustls na thread da
 /// conexão, depois cópia bidirecional (um sentido por thread).
+#[allow(dead_code)]
 pub fn start_tls_proxy(
     bind_ip: &str,
     port: u16,

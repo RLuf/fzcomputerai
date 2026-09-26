@@ -43,19 +43,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        working-directory: fzcomputerai
         run: cargo build --locked
 
       - name: Test
-        working-directory: fzcomputerai
         run: cargo test --locked
 
       - name: Run clippy
-        working-directory: fzcomputerai
         run: cargo clippy --locked --all-targets
         continue-on-error: true
 
       - name: Format Check
-        working-directory: fzcomputerai
         run: cargo fmt --check
         continue-on-error: true

@@ -161,18 +161,23 @@ pub struct AppState {
     pub portproxy_rules: Vec<String>,
 
     // Calibração & Visão
+    #[allow(dead_code)]
     pub screen_width: u32,
+    #[allow(dead_code)]
     pub screen_height: u32,
+    #[allow(dead_code)]
     pub dpi_scale: f32,
     pub test_x: String,
     pub test_y: String,
 
     // Janelas & Processos
+    #[allow(dead_code)]
     pub windows_list: Vec<WindowItem>,
     pub launch_input: String,
 
     // Gravação & Trajetórias
     pub is_recording: bool,
+    #[allow(dead_code)]
     pub recording_path: String,
 
     pub show_about: bool,
@@ -387,6 +392,7 @@ pub struct AppState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum PyProxyStatus {
     Stopped,
     Starting,
@@ -1278,6 +1284,7 @@ impl AppState {
     ///   3. reler `show v4tov4` e confirmar a regra por token;
     ///   4. confirmar com netstat que `<ip>:<porta>` está LISTENING;
     ///   5. refazer o teste TCP nos dois endereços (check_port_status).
+    #[allow(dead_code)]
     pub fn apply_portproxy(&mut self) {
         #[cfg(target_os = "windows")]
         {
@@ -1630,6 +1637,7 @@ impl AppState {
     /// Remove a regra portproxy (netsh delete) com o MESMO fluxo honesto do
     /// apply_portproxy: tentativa direta, fallback elevado via UAC oficial e
     /// confirmação relendo `show v4tov4` — o estado exibido nunca é presumido.
+    #[allow(dead_code)]
     pub fn remove_portproxy(&mut self) {
         // Se o encaminhamento é nosso (thread no app), basta derrubá-lo — não
         // há regra de sistema para apagar nem admin a pedir.
@@ -3501,6 +3509,7 @@ impl AppState {
     ///
     /// Escuta em `<ip_lan>:porta` e copia bytes nos dois sentidos contra
     /// `127.0.0.1:porta` (onde o motor escuta, com bind fixo no upstream).
+    #[allow(dead_code)]
     fn start_lan_forward(&mut self, ip: &str, port: u16) -> bool {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
@@ -3635,6 +3644,7 @@ impl AppState {
         None
     }
 
+    #[allow(dead_code)]
     pub fn set_py_proxy_autostart(&mut self, enable: bool) {
         self.py_proxy_autostart = enable;
         self.cfg_set("appcfg:py_proxy_autostart", if enable { "1" } else { "0" });
@@ -3644,6 +3654,7 @@ impl AppState {
         ));
     }
 
+    #[allow(dead_code)]
     pub fn set_py_proxy_port(&mut self, port: String) {
         self.py_proxy_port = port.clone();
         self.cfg_set("appcfg:py_proxy_port", &port);

@@ -1,5 +1,5 @@
 use crate::app::{
-    status_dot, term_button, term_button_danger, AppState, Language, PortStatus, PyProxyStatus, TlsBind,
+    status_dot, term_button, term_button_danger, AppState, Language, PortStatus, TlsBind,
     TlsMode, TlsStatus, TERM_BG_PANEL, TERM_GRAY, TERM_GREEN, TERM_GREEN_BRIGHT, TERM_WHITE,
     ST_ERR, ST_OK, ST_WARN,
 };
