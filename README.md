@@ -24,14 +24,19 @@
 > O motor de automação é o **`cua-driver`**, do projeto open-source [**Cua**](https://github.com/trycua/cua) (MIT, Cua AI, Inc.). O FzComputerAI **não substitui o motor** — é o cockpit dele.
 
 ### ✨ Novidades da v2.4.1
-- **Melhoria na Documentação de Conexões Externas**: Instruções completas e testadas para orquestradores que utilizam OAuth genérico (como n8n, Make), informando os campos exatos de proxy.
-
-### ✨ Novidades da v2.4.0
-- **Inicialização 1-Click Zero-Config**: O Proxy OAuth 2.1 e o Daemon iniciam sozinhos.
-- **Port Killer Antizumbi**: Garante conectividade real derrubando processos fantasmas e garantindo a porta `8000`.
-- **Binário Ultra Otimizado**: Tamanho do executável reduzido para ~5MB através do `opt-level=s` e strip agressivo. Nada de arquivos PDB gigantes e pesados.
-- **Estrutura Flat**: Todo o projeto agora reside na raiz. Chega de `fzcomputerai/fzcomputerai/`. A documentação, Inno Setup e pacotes compilarão redondinhos.
-- **Aba de Rede Mestre**: Interface super simplificada, com os logs em tempo real fundidos de forma limpa.
+- **Instalador Windows Tudo-em-Um Aprimorado (`fzcomputerai-setup-windows-x64.exe`)**:
+  - Opção no assistente de instalação para baixar e configurar o **Cloudflared oficial** (Cloudflare Tunnel) de forma automatizada.
+  - Opção para instalar automaticamente as **dependências Python do Proxy OAuth 2.1** (`pip install -r requirements.txt`).
+  - Geração automática e idempotente do certificado auto-assinado HTTPS (`--tls-init`) sem instalar nada indevido na máquina.
+- **Suíte Autônoma do Proxy MCP OAuth 2.1 (`mcp-oauth-proxy/`)**:
+  - Utilitário Python leve (`server.py`, `start-proxy.bat`, `requirements.txt`) para intermediar clientes e orquestradores (n8n, Make, Flowise, Cursor) sem atrito de TLS.
+  - Documentação dedicada em [docs/oauth-proxy.md](docs/oauth-proxy.md).
+- **Utilitário de Instalação do Cloudflared (`scripts/install-cloudflared.ps1`)**:
+  - Script autônomo com suporte a winget portátil e fallback oficial do GitHub da Cloudflare.
+- **Verificação Estendida Pós-Instalação (`verify-install.ps1`)**:
+  - Checagem automática completa de conectividade MCP, portas, autostart, motor e binário `cloudflared`.
+- **Diretivas Normativas para Agentes (`AGENTES.md` e `AGENTS.md`)**:
+  - Consolidação obrigatória da **Regra de Ouro** (`archived/`) antes de qualquer alteração destrutiva ou remoção de arquivos.
 
 ---
 
@@ -219,9 +224,13 @@ O instalador (Inno Setup, bilíngue PT-BR / English) faz:
 - **Instala a GUI** em `%LOCALAPPDATA%\Programs\FzComputerAI` — no caso padrão **não pede UAC**; no diálogo é possível optar por instalar para todos os usuários (aí sim eleva).
 - **Cria atalho** no Menu Iniciar e, opcionalmente, na Área de Trabalho.
 - **Opção "Iniciar o FzComputerAI com o Windows"** (autostart) — grava exatamente a mesma chave `HKCU\...\Run` usada pelo checkbox da aba *MCP & Rede*, de modo que GUI e instalador nunca se contradizem.
+- **Opção "Baixar e configurar o Cloudflared"** (desmarcada por padrão) — automatiza o download do Cloudflare Tunnel oficial para conexões e túneis HTTPS sem precisar abrir portas no roteador.
+- **Opção "Instalar dependências Python do Proxy OAuth 2.1"** (desmarcada por padrão) — instala via `pip` as dependências necessárias para rodar o `mcp-oauth-proxy` para integrações com n8n, Make e agentes remotos.
 - **Opção "Instalar o motor `cua-driver`"** (desmarcada por padrão, requer internet) — executa o instalador **oficial** do projeto cua, que instala a **última versão estável** publicada.
+- **Gera o certificado TLS auto-assinado** (`--tls-init`) de forma limpa e idempotente, pronto para servir HTTPS com pin SHA-256 no app sem alterar stores de certificados do Windows.
 - **Instala o pacote de skills** ao final da instalação (`cua-driver skills install`). Sem esses symlinks o agente conecta no MCP e **não enxerga ferramenta nenhuma** — e quem acabou de instalar não teria como adivinhar que precisa clicar num botão da aba *Doctor & Skills*. É idempotente e, pelo help oficial do motor, *"Never overwrites existing user links"*; os quatro alvos são Claude Code, Codex, Antigravity e Hermes.
-- **Registra um desinstalador** em *Configurações → Aplicativos → Aplicativos instalados*. Ele remove a GUI; o `cua-driver` tem ciclo de vida próprio e **não** é removido junto (o desinstalador avisa isso na tela).
+- **Oferece relatório completo de verificação pós-instalação** (`verify-install.ps1`) com 9 verificações de integridade.
+- **Registra um desinstalador** em *Configurações → Aplicativos → Aplicativos instalados*. Ele remove a GUI e artefatos de túnel; o `cua-driver` tem ciclo de vida próprio e **não** é removido junto (o desinstalador avisa isso na tela).
 
 > ⚠️ **Aviso do SmartScreen — leia antes de executar**
 >

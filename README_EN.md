@@ -24,14 +24,19 @@
 > The automation engine is **`cua-driver`**, from the open-source [**Cua**](https://github.com/trycua/cua) project (MIT, Cua AI, Inc.). FzComputerAI **does not replace the engine** — it is the cockpit for it.
 
 ### ✨ What's new in v2.4.1
-- **External Connections Documentation**: Complete and tested instructions for orchestrators using generic OAuth 2.0 (like n8n, Make), providing the exact proxy fields.
-
-### ✨ What's new in v2.4.0
-- **1-Click Zero-Config Startup**: The OAuth 2.1 Proxy and Daemon now start automatically.
-- **Anti-Zombie Port Killer**: Ensures real connectivity by aggressively killing ghost processes holding port `8000`.
-- **Ultra-Optimized Binary**: Executable size reduced to ~5MB via `opt-level=s` and aggressive stripping. No more massive PDB files.
-- **Flattened Repo Structure**: The whole project now resides at the root. No more `fzcomputerai/fzcomputerai/`. Documentation, Inno Setup, and packages build smoothly.
-- **Master Network Tab**: Super simplified interface, with real-time logs merged cleanly.
+- **Enhanced All-in-One Windows Installer (`fzcomputerai-setup-windows-x64.exe`)**:
+  - Wizard task to automatically download and configure **official Cloudflared** (Cloudflare Tunnel) without manual setup.
+  - Wizard task to install **Python OAuth 2.1 Proxy dependencies** (`pip install -r requirements.txt`).
+  - Idempotent and clean TLS self-signed certificate generation (`--tls-init`) out of the box without polluting machine root stores.
+- **Standalone MCP OAuth 2.1 Proxy Suite (`mcp-oauth-proxy/`)**:
+  - Lightweight Python server (`server.py`, `start-proxy.bat`, `requirements.txt`) bridging remote connectors (n8n, Make, Flowise, Cursor) seamlessly.
+  - Dedicated technical documentation in [docs/oauth-proxy.md](docs/oauth-proxy.md).
+- **Cloudflared Download Utility (`scripts/install-cloudflared.ps1`)**:
+  - Standalone script supporting portable winget and direct official Cloudflare GitHub fallback.
+- **Extended Post-Install Verification (`verify-install.ps1`)**:
+  - Automated 9-point health check covering MCP JSON-RPC, ports, autostart, CUA engine and `cloudflared`.
+- **Mirror AI Agent Normative Guidelines (`AGENTES.md` and `AGENTS.md`)**:
+  - Enforced the Golden Rule (`archived/`) before any destructive edits or file modifications.
 
 ---
 
@@ -219,9 +224,13 @@ The installer (Inno Setup, bilingual PT-BR / English) does the following:
 - **Installs the GUI** into `%LOCALAPPDATA%\Programs\FzComputerAI` — the default case **does not trigger UAC**; you may choose to install for all users in the wizard (that path does elevate).
 - **Creates a Start Menu shortcut** and, optionally, a Desktop shortcut.
 - **"Start FzComputerAI with Windows" option** (autostart) — writes exactly the same `HKCU\...\Run` key used by the checkbox on the *MCP & Network* tab, so the GUI and the installer never contradict each other.
+- **"Download and configure Cloudflared" option** (unchecked by default) — sets up the official Cloudflare Tunnel binary for effortless remote HTTPS access without router port-forwarding.
+- **"Install Python OAuth 2.1 Proxy dependencies" option** (unchecked by default) — installs required packages via `pip` for `mcp-oauth-proxy` to integrate with n8n, Make and remote agents.
 - **"Install the `cua-driver` engine" option** (unchecked by default, requires internet) — runs the **official** cua project installer, which installs the **latest stable** release.
+- **Generates self-signed TLS certificate** (`--tls-init`) idempotently, ready for serving local HTTPS with SHA-256 fingerprint displayed on screen without touching Windows trust stores.
 - **Installs the skills bundle** at the end of the installation (`cua-driver skills install`). Without those symlinks the agent connects to the MCP server and **sees no tools at all** — and someone who just installed the app has no way of guessing they must click a button on the *Doctor & Skills* tab. It is idempotent and, per the engine's own official help, *"Never overwrites existing user links"*; the four targets are Claude Code, Codex, Antigravity and Hermes.
-- **Registers an uninstaller** under *Settings → Apps → Installed apps*. It removes the GUI; `cua-driver` has its own lifecycle and is **not** removed along with it (the uninstaller says so on screen).
+- **Provides full post-install verification report** (`verify-install.ps1`) executing 9 deep integrity and connectivity checks.
+- **Registers an uninstaller** under *Settings → Apps → Installed apps*. It removes the GUI and tunnel artifacts; `cua-driver` has its own lifecycle and is **not** removed along with it (the uninstaller says so on screen).
 
 > ⚠️ **SmartScreen warning — read before running**
 >

@@ -95,6 +95,7 @@ Não há nada a fazer na GUI: com a VPN de pé, a outra máquina alcança o IP d
 
 ## Ver também
 
+- [oauth-proxy.md](oauth-proxy.md) — micro-proxy Python auxiliar (`mcp-oauth-proxy`) para conectores de IA e ambientes sem TLS.
 - [uso-mcp-rede.md](uso-mcp-rede.md) — aplicar porta, encaminhamento LAN e leitura do diagnóstico cru.
 - [uso-tunel.md](uso-tunel.md) — provedores, senha na URL, sonda de exposição e ciclo de vida.
 - [https.md](https.md) — HTTPS na LAN/local sem serviço externo: auto-assinado automático, Let's Encrypt, cert próprio.

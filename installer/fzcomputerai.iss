@@ -372,8 +372,20 @@ english.CompDocs=Documentation, license and verification script
 ; --- Tarefas ---
 brazilianportuguese.GroupAdditional=Opcoes adicionais:
 brazilianportuguese.TaskAutostart=Iniciar o FzComputerAI com o Windows
+brazilianportuguese.GroupTunnels=Tunel e Acesso Remoto:
+brazilianportuguese.TaskCloudflared=Baixar e configurar o Cloudflared (Cloudflare Tunnel para acesso externo seguro)
+brazilianportuguese.StatusCloudflared=Baixando e configurando o Cloudflared via winget / GitHub oficial...
+brazilianportuguese.GroupPyProxy=Conectores e Proxy OAuth 2.1 (Python):
+brazilianportuguese.TaskPyProxyDeps=Instalar dependencias Python do proxy OAuth 2.1 (requests, cryptography)
+brazilianportuguese.StatusPyProxyDeps=Instalando dependencias Python para o proxy MCP OAuth 2.1...
 english.GroupAdditional=Additional options:
 english.TaskAutostart=Start FzComputerAI with Windows
+english.GroupTunnels=Tunnel and Remote Access:
+english.TaskCloudflared=Download and configure Cloudflared (Cloudflare Tunnel for secure remote access)
+english.StatusCloudflared=Downloading and configuring Cloudflared via winget / official GitHub...
+english.GroupPyProxy=Connectors and OAuth 2.1 Proxy (Python):
+english.TaskPyProxyDeps=Install Python dependencies for OAuth 2.1 proxy (requests, cryptography)
+english.StatusPyProxyDeps=Installing Python dependencies for MCP OAuth 2.1 proxy...
 
 ; --- Pagina de PRE-REQUISITOS ---
 brazilianportuguese.PrereqCaption=Pre-requisitos
@@ -491,11 +503,11 @@ Name: "docs";   Description: "{cm:CompDocs}";   Types: full custom
 
 
 [Tasks]
-; [Tasks] agora contem SO opcoes de comportamento (atalho e autostart). O que
-; e "parte do produto" virou [Components] acima - a distincao que o usuario
-; espera: componente = o que instalar, tarefa = como se comportar depois.
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Components: main
-Name: "autostart";   Description: "{cm:TaskAutostart}";     GroupDescription: "{cm:GroupAdditional}"; Components: main
+; [Tasks] contem opcoes de comportamento (atalho, autostart, integracoes opcionais).
+Name: "desktopicon";       Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Components: main
+Name: "autostart";         Description: "{cm:TaskAutostart}";     GroupDescription: "{cm:GroupAdditional}"; Components: main
+Name: "installcloudflared"; Description: "{cm:TaskCloudflared}";   GroupDescription: "{cm:GroupTunnels}";    Components: main; Flags: unchecked
+Name: "pyproxydeps";        Description: "{cm:TaskPyProxyDeps}";    GroupDescription: "{cm:GroupPyProxy}";    Components: main; Flags: unchecked
 
 
 [Files]
@@ -637,6 +649,12 @@ Root: HKCU; Subkey: "Environment"; ValueType: string; ValueName: "CUA_DRIVER_RS_
 ; NAO instala nada em store de confianca (AGENTS.md secao 4.1) - e um cert
 ; de SERVIDOR TLS do endpoint, que o cliente confia pelo fingerprint/.crt.
 Filename: "{app}\{#ExeName}"; Parameters: "--tls-init"; WorkingDir: "{app}"; StatusMsg: "{cm:StatusTlsInit}"; Components: main; Flags: runhidden waituntilterminated
+
+; --- Instalacao do Cloudflared (opcional, selecionado na task) --------------
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-cloudflared.ps1"""; WorkingDir: "{app}"; StatusMsg: "{cm:StatusCloudflared}"; Tasks: installcloudflared; Flags: runhidden waituntilterminated
+
+; --- Dependencias Python do Proxy OAuth (opcional, selecionado na task) -----
+Filename: "cmd.exe"; Parameters: "/c python -m pip install --quiet -r ""{app}\mcp-oauth-proxy\requirements.txt"""; WorkingDir: "{app}\mcp-oauth-proxy"; StatusMsg: "{cm:StatusPyProxyDeps}"; Tasks: pyproxydeps; Flags: runhidden waituntilterminated
 
 ; --- Abrir a GUI ao final --------------------------------------------------
 Filename: "{app}\{#ExeName}"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Components: main; Flags: nowait postinstall skipifsilent

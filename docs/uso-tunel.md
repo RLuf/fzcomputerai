@@ -53,7 +53,10 @@ O `Iniciar túnel` executa pré-checagens honestas e **recusa** em vez de subir 
 
 ### 4.1 Cloudflare — quick tunnel (sem conta)
 
-1. Selecione **Cloudflare**. Se o binário não for encontrado, clique **Baixar cloudflared**. O download usa `winget install --id Cloudflare.cloudflared --installer-type portable` e, se isso não produzir o executável, cai para o release oficial do GitHub; o console registra o **SHA256** e o status do Authenticode do arquivo obtido.
+1. Selecione **Cloudflare**. Se o binário não for encontrado, clique **Baixar cloudflared**.
+   - **Opção via Instalador (v2.4.1+):** Você pode marcar a opção de baixar o Cloudflared diretamente durante a instalação do FzComputerAI pelo instalador gráfico Inno Setup.
+   - **Opção via Script Autônomo:** Execute `powershell -ExecutionPolicy Bypass -File scripts/install-cloudflared.ps1`.
+   - **Pela Interface:** O botão da interface usa `winget install --id Cloudflare.cloudflared --installer-type portable` com fallback transparente para o GitHub oficial da Cloudflare, conferindo hash e autenticação.
 2. Deixe o campo de token vazio — vazio significa modo QUICK.
 3. Clique **Iniciar túnel**. No modal, opcionalmente defina uma senha (seção 5).
 4. O processo sobe como:

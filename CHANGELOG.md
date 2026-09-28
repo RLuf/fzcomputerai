@@ -7,7 +7,29 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
-## [2.4.1] - 2026-09-25
+## [2.4.1] - 2026-09-28
+
+### Adicionado
+- **Instalador Oficial Inno Setup com Tarefas Modulares (`installer/fzcomputerai.iss`)**:
+  - Nova tarefa `installcloudflared`: baixa e configura o Cloudflared oficial (Cloudflare Tunnel) de forma automática.
+  - Nova tarefa `pyproxydeps`: instala automaticamente as dependências Python (`requests`, `cryptography`) do proxy MCP OAuth 2.1 via `pip`.
+  - Novas mensagens localizadas em português brasileiro (`brazilianportuguese`) e inglês (`english`) no assistente do instalador.
+- **Utilitário Autônomo de Download do Cloudflared (`scripts/install-cloudflared.ps1`)**:
+  - Instalação via `winget` (modo portátil) com fallback transparente para o binário oficial publicado no GitHub da Cloudflare.
+- **Suíte Autônoma do Proxy MCP OAuth 2.1 (`mcp-oauth-proxy/`)**:
+  - Script de inicialização facilitada `start-proxy.bat`.
+  - Arquivo de dependências padronizado `requirements.txt`.
+  - Guia técnico dedicado em `docs/oauth-proxy.md` detalhando integrações com n8n, Make, Flowise, Cursor e conectores MCP remotos.
+- **Verificação Pós-Instalação Estendida (`installer/verify-install.ps1`)**:
+  - Adicionado teste #9 verificando a disponibilidade e versão do binário `cloudflared`.
+- **Diretivas Normativas Espelhadas (`AGENTES.md`)**:
+  - Criado `AGENTES.md` em português espelhando integralmente `AGENTS.md`, com ênfase na Regra de Ouro (`archived/`).
+
+### Corrigido & Otimizado
+- **Workflow de Integração Contínua (`.github/workflows/ci.yml`)**:
+  - Corrigido caminho de diretório de trabalho (`working-directory`) após o achatamento (*flattening*) do repositório na raiz.
+- **Eliminação Total de Warnings do Rust**:
+  - Refatorados `src/app.rs`, `src/oauth.rs`, `src/tls.rs` e `src/tabs/network.rs`, atingindo 0 warnings no compilador Rust.
 
 ### Documentação e Usabilidade
 - **Instruções para Clientes OAuth 2.0 Genéricos (n8n, Make)**: Incluídas as configurações exatas para contornar problemas de formulários abertos que exigem chaves explícitas. (Dica de ouro: O Client ID é aceito dinamicamente pelo nosso Proxy Python e o método 'Client Secret Basic' resolve a barreira de entrada da maioria das ferramentas).
