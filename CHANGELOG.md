@@ -7,6 +7,20 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/spec/v2.0.
 
 ---
 
+## [Não lançado]
+
+### Documentação
+- **Limitações do transporte HTTP remoto documentadas (`SKILL.md`, `AGENTS.md`, `README.md`)**: tabela de sintomas → causa → contorno, verificada em 20/10/2026 a partir do Claude.ai contra o Bloco de Notas moderno (XAML) no papaimach:
+  - sessão nomeada (`session`) morre entre chamadas (transporte sem estado);
+  - clique por pixel exige screenshot "da mesma conexão", inviável nesse transporte;
+  - `element_token` só existe em `structuredContent`, que alguns clientes MCP não entregam ao modelo;
+  - `hotkey` ignora `delivery_mode:"foreground"` em alvo XAML (usar `press_key` + `modifiers`);
+  - `type_text` em foreground só entra após `bring_to_front` + `scope:"desktop"`.
+  - Receita mínima de 3 chamadas para "abrir app e digitar" registrada no `SKILL.md`.
+- Issue aberta no GitHub para correção no driver (ver link na issue "Remote HTTP transport: session dies per call…").
+
+---
+
 ## [2.4.1] - 2026-09-28
 
 ### Adicionado

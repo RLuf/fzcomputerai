@@ -87,6 +87,27 @@ Every interaction follows a three-step cycle:
 > **CRITICAL**: Always re-screenshot after every UI change — coordinates go
 > stale when the screen changes.
 
+### Known caveats over the remote HTTP/OAuth transport (observed 2026-10-20, Claude.ai → mcpoahome)
+
+Verified on papaimach against modern (XAML/WinUI) Notepad. Tracked in the
+GitHub issue "Remote HTTP transport: session dies per call, element_token
+not surfaced, XAML hotkey ignores foreground". Until fixed, agents must use
+the workarounds below instead of looping on the "preferred" path.
+
+| Symptom | Cause / effect | Workaround |
+|---|---|---|
+| Any call with `session:"x"` after `start_session("x")` → `session 'x' has ended` | Transport is stateless per call; the lifecycle session does not survive between HTTP requests | Omit `session` everywhere (implicit session) |
+| `click {x,y}` → `No current snapshot ... owned by this session` | Pixel actions require a screenshot taken on the **same connection**; with a stateless transport there is never one | Do not use pixel clicks through this transport. Use `invoke_menu`, `press_key`/`type_text` in foreground, or `bring_to_front` + `scope:"desktop"` |
+| `get_window_state` text output has `[element_index N]` but no `element_token` | Tokens exist only in `structuredContent`, which some MCP clients (Claude.ai chat) do not surface to the model | Agents without `structuredContent` cannot use `element_token`; same workaround as above |
+| `hotkey ["ctrl","n"]` on XAML target → "could not find a UIA AcceleratorKey" **even with `delivery_mode:"foreground"`** | `hotkey` ignores `foreground` on XAML hosts and only does the UIA accelerator scan | Use `press_key {key:"n", modifiers:["ctrl"], delivery_mode:"foreground"}` — this path goes through SendInput and works |
+| `type_text` with `delivery_mode:"foreground"` reports success but 0 chars land | Brief foreground swap does not give the XAML editor keyboard focus | `bring_to_front {pid, window_id}` first, then `type_text {text, scope:"desktop", delivery_mode:"foreground"}` |
+| `set_value {pid, window_id, value}` → `requires an admitted element target` | Needs `element_token` (see above) | Same as `type_text` workaround |
+| `invoke_menu ["Arquivo","Nova guia"]` → `segment 1 was not found` | Modern Notepad's File flyout is a separate popup; it is not resolved as a child level | `press_key` with modifiers in foreground (above) |
+
+Shortest known-good recipe for "open Notepad and type X" over this transport
+(3 calls): `launch_app {aumid}` → `bring_to_front {pid, window_id}` →
+`type_text {text, scope:"desktop", delivery_mode:"foreground"}`.
+
 ## MCP JSON-RPC Protocol
 
 All tools are invoked via `POST http://<ip>:8000/mcp` with a JSON-RPC 2.0 body:

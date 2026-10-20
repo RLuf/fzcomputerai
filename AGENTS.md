@@ -72,6 +72,7 @@ Este arquivo contém as convenções, regras de arquitetura e padrões de opera�
   - `take_screenshot`: Imagem base64 para modelos de visão multimodal.
   - `mouse_click`, `mouse_move`, `mouse_drag`, `keyboard_type`, `keyboard_press`, `shortcut`.
   - `start_recording`, `stop_recording`.
+- **Limitações conhecidas do transporte HTTP remoto (OAuth/mcpoahome), verificadas em 20/10/2026** — ver tabela em `SKILL.md` ("Known caveats over the remote HTTP/OAuth transport"). Resumo para agentes: não usar `session` nomeada (morre a cada chamada); não usar clique por pixel nem `element_token` (snapshot/token não sobrevivem entre requisições); em alvo XAML usar `press_key` + `modifiers` em `foreground` no lugar de `hotkey`; para digitar, `bring_to_front` seguido de `type_text scope:"desktop"`. Quem corrigir qualquer um desses itens no driver deve apagar a linha correspondente da tabela e registrar no `CHANGELOG.md`.
 
 ### 3. Preservação de Direitos & Atribuição
 - O motor `cua-driver` é parte do projeto open-source `trycua/cua`, de **Cua AI, Inc.**, sob licença **MIT** (`Copyright (c) 2025 Cua AI, Inc.`).

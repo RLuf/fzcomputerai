@@ -424,6 +424,7 @@ A documentação detalhada vive em [`docs/`](docs/README.md):
 | [Solução de problemas](docs/solucao-de-problemas.md) | Sintoma → causa → verificação → correção |
 | [Desenvolvimento](docs/desenvolvimento.md) | Compilar, convenções obrigatórias do código e build do instalador |
 | [FAQ](docs/faq.md) | Perguntas diretas, com respostas honestas |
+| [Limitações do transporte remoto](SKILL.md#known-caveats-over-the-remote-httpoauth-transport-observed-2026-10-20-claudeai--mcpoahome) | Sintoma → causa → contorno para agentes via HTTP/OAuth (sessão, pixel, `element_token`, `hotkey` em XAML) |
 
 ---
 
